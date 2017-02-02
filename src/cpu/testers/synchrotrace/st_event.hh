@@ -290,10 +290,17 @@ class STEvent
 
     /**
      * Address of the critical variable used in Pthread calls, for e.g. the
-     * mutex lock address, barrier variable address or address of the input
-     * variable that holds the thread information when creating a new thread
+     * mutex lock address, barrier variable address, conditional variable
+     * address, or address of the input variable that holds the thread
+     * information when creating a new thread
      */
     Addr pthAddr;
+
+    /**
+     * Mutex lock address used in conjunction with conditional variable
+     * address set in pthAddr
+     */
+    Addr mutexLockAddr;
 
     /**
      * A queue of sub events which hold operations that are bundled up in

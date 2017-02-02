@@ -81,7 +81,7 @@ STParser::processPthreadFile()
 
             if (hash_pos != string::npos)
                 processAddressToID(pthread_file_line, hash_pos);
-            else
+            else if (star_pos != string::npos)
                 processBarrierEvent(pthread_file_line, star_pos);
         } else
             break;
@@ -110,18 +110,23 @@ STParser::processBarrierEvent(string line, size_t star_pos){
     size_t old_pos = 0;
     string barrier_address_string = barrier_line.substr(0, comma_pos);
     string tidlist = barrier_line.substr(comma_pos + 1);
+    ThreadID thread_id;
     comma_pos = tidlist.find(',');
 
     set<ThreadID> thread_ids;
 
     while (comma_pos != string::npos) {
-        ThreadID thread_id = strtol(tidlist.substr(old_pos, comma_pos).c_str(),
+        thread_id = strtol(tidlist.substr(old_pos, comma_pos).c_str(),
                                     NULL, 0) - 1;
         assert(thread_id >= 0);
         thread_ids.insert(thread_id);
         old_pos = comma_pos + 1;
         comma_pos = tidlist.find(',', comma_pos + 1);
     }
+    thread_id =
+        strtol(tidlist.substr(old_pos, string::npos).c_str(),NULL,0) - 1;
+    thread_ids.insert(thread_id);
+
 
     Addr barrier_address = strtoul(barrier_address_string.c_str(), NULL, 0);
     barrierMap[barrier_address] = thread_ids;
@@ -545,7 +550,7 @@ STParser::processCompReadEvent(string dependency_info, STEvent *new_event)
 void
 STParser::processPthreadEvent(string this_event, size_t caret_pos)
 {
-    string event_info = this_event.substr(0, caret_pos - 1);
+    string event_info = this_event.substr(0, caret_pos);
     STEvent *new_event = new STEvent();
     new_event->subEventList = NULL;
     new_event->eventClass = STEvent::THREAD_API;
@@ -578,10 +583,22 @@ STParser::processPthreadEvent(string this_event, size_t caret_pos)
       }
     }
 
-    new_event->pthAddr =
-        strtoul(this_event.substr(caret_pos + 2, string::npos).c_str(),
-                NULL, 0);
+    // Capture mutex lock address for Conditional Wait/Signal in addition to
+    // pthread address, otherwise capture pthread address.
 
+    size_t amp_pos = this_event.rfind('&');
+    if (amp_pos != string::npos) { // Conditional wait found
+        new_event->mutexLockAddr =
+            strtoul(this_event.substr(amp_pos + 1, string::npos).c_str(),
+                                      NULL, 0);
+        new_event->pthAddr =
+            strtoul(this_event.substr(caret_pos + 1, amp_pos - 1).c_str(),
+                                      NULL, 0);
+    } else {
+        new_event->pthAddr =
+            strtoul(this_event.substr(caret_pos + 1, string::npos).c_str(),
+                NULL, 0);
+    }
     if (new_event->evThreadID > numThreads || new_event->evThreadID < 0)
         panic("ThreadID bad! Check number of threads in configuration\n");
     eventMap[new_event->evThreadID]->push_back(new_event);
