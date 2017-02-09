@@ -1,10 +1,11 @@
 #SYNCHROTRACE
 
 There are two tools which together form the prototype SynchroTrace simulation flow built into gem5.
+
 	1) Sigil2 (https://github.com/mikelui/Sigil2/) - Multi-Threaded Application Trace Capture Tool
 	2) Replay - Event-Trace Replay Framework
 
-This code base includes (2) Replay from the patch (http://reviews.gem5.org/r/3687/), built into a forked version of gem5.
+This code base includes 2) Replay from the patch (http://reviews.gem5.org/r/3687/), built into a forked version of gem5.
 	
 The logical steps to using this simulation environment for design space exploration or CMP simulation is as follows:
 	1)
