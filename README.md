@@ -31,7 +31,7 @@ $ git clone https://github.com/dpac-vlsi/SynchroTrace-gem5.git
   c) Run the following command (Note that the number of jobs refers to the number of cores available for compilation):
      
 ```sh
-     scons build/X86_MESI_Two_Level/gem5.opt --jobs=6
+$ scons build/X86_MESI_Two_Level/gem5.opt --jobs=6
 ```
 At this point, the gem5 executable should be built with integrated Trace Replay in the location specified in the command above.
 
@@ -48,14 +48,14 @@ This script can be found at:
 An example command to run SynchroTrace:
 
 ```sh
-./build/X86_MESI_Two_Level/gem5.opt --debug-flags=STIntervalPrint ./configs/example/synchrotrace_ruby.py --ruby --network=garnet2.0 --topology=Mesh_XY --mesh-rows=8 --event-dir=$eventDir --output-dir=. --num-cpus=8 --num-threads=8 --num-dirs=8 --num-l2caches=8 --l1d_size=64kB --l1d_assoc=2 --l1i_size=64kB --l1i_assoc=2 --l2_size=4096kB --l2_assoc=8 --cpi-iops=1 --cpi-flops=1 --bandwidth-factor=4 --master-freq=1 --cacheline_size=64"
+$ ./build/X86_MESI_Two_Level/gem5.opt --debug-flags=STIntervalPrint ./configs/example/synchrotrace_ruby.py --ruby --network=garnet2.0 --topology=Mesh_XY --mesh-rows=8 --event-dir=$eventDir --output-dir=. --num-cpus=8 --num-threads=8 --num-dirs=8 --num-l2caches=8 --l1d_size=64kB --l1d_assoc=2 --l1i_size=64kB --l1i_assoc=2 --l2_size=4096kB --l2_assoc=8 --cpi-iops=1 --cpi-flops=1 --bandwidth-factor=4 --master-freq=1 --cacheline_size=64"
 ```
 
 where the $eventDir points to the directory of the traces and $outputDir points to the desired output directory path.
 
 For a list of valid arguments, run the following from the main SynchroTrace folder:
 ```sh
-$ ./build/X86_MESI_CMP_directory/gem5.opt ./configs/example/synchrotrace_ruby.py --help
+$ ./build/X86_MESI_Two_Level/gem5.opt ./configs/example/synchrotrace_ruby.py --help
 ```
 
 Once the run is completed, simulated metrics can be found in m5out/stats.txt
