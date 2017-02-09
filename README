@@ -1,41 +1,65 @@
-This is the gem5 simulator.
+SYNCHROTRACE:
 
-The main website can be found at http://www.gem5.org
+There are two tools which together form the prototype SynchroTrace simulation flow built into Gem5.
+	1) Sigil - Multi-threaded Trace Capture Tool
+	2) Replay - Event-Trace Replay Framework
 
-A good starting point is http://www.gem5.org/Introduction, and for
-more information about building the simulator and getting started
-please see http://www.gem5.org/Documentation and
-http://www.gem5.org/Tutorials.
+This code base includes (2) Replay.
+	
+The logical steps to using this simulation environment for design space exploration or CMP simulation is as follows:
+	1)
+	  a) Generate Multi-threaded Event Traces for the program binary you are testing (See Sigil documentation for further information):
+		-Use the Sigil wrapping script (runsigil_and_gz_newbranch.py) with necessary options on your binary
+	   OR
+	  b) Use previously generated or sample traces
+	2) Compile SynchroTrace (For a list of dependencies, please look in the Additional Notes section below)
+	3) Run SynchroTrace with necessary options on the generated traces
+	
+Simulating FFT with SynchroTrace (Using Pre-generated Traces):
 
-To build gem5, you will need the following software: g++ or clang,
-Python (gem5 links in the Python interpreter), SCons, SWIG, zlib, m4,
-and lastly protobuf if you want trace capture and playback
-support. Please see http://www.gem5.org/Dependencies for more details
-concerning the minimum versions of the aforementioned tools.
+1) Compile SynchroTrace using SConscript:
 
-Once you have all dependencies resolved, type 'scons
-build/<ARCH>/gem5.opt' where ARCH is one of ALPHA, ARM, NULL, MIPS,
-POWER, SPARC, or X86. This will build an optimized version of the gem5
-binary (gem5.opt) for the the specified architecture. See
-http://www.gem5.org/Build_System for more details and options.
+  a) Go to the base SynchroTrace directory
+  b) Run the following command (Note that the number of jobs refers to the number of cores available for compilation):
+     For Ruby:
 
-With the simulator built, have a look at
-http://www.gem5.org/Running_gem5 for more information on how to use
-gem5.
+     scons build/X86_MESI_Two_Level/gem5.opt --jobs=N
 
-The basic source release includes these subdirectories:
-   - configs: example simulation configuration scripts
-   - ext: less-common external packages needed to build gem5
-   - src: source code of the gem5 simulator
-   - system: source for some optional system software for simulated systems
-   - tests: regression tests
-   - util: useful utility programs and files
+     For Classic Memory:
 
-To run full-system simulations, you will need compiled system firmware
-(console and PALcode for Alpha), kernel binaries and one or more disk
-images. Please see the gem5 download page for these items at
-http://www.gem5.org/Download
+     scons build/ARM/gem5.opt --jobs=N
+	
+2) Run SynchroTrace on the 8-thread traces of FFT:
 
-If you have questions, please send mail to gem5-users@gem5.org
+  a) Go to the base SynchroTrace directory
+  b) Run the following script:
 
-Enjoy using gem5 and please share your modifications and extensions.
+     st_fft_8th_ruby.pl or st_fft_8th_classic_mem.pl
+
+####################################################################################################################################
+Additional Notes:
+
+1) Sample Sigil Traces are located in $BASESYNCHROTRACEDIR/sample_sigil_traces
+
+2) SynchroTrace configurations are located in $BASESYNCHROTRACEDIR/configs/synchrotrace/synchrotrace_ruby.py and $BASESYNCHROTRACEDIR/configs/synchrotrace/synchrotrace_classic_memory.py
+
+3) The st_fft_8th_ruby.pl run script has a section for debug flags. The following is a list of the available debug flags used by SynchroTrace with brief descriptions.
+
+DebugFlag('STMutexLogger') - Prints order of threads obtaining mutex lock
+DebugFlag('STEventPrint') - Prints EventID# for specific thread before/after event started/completed. This debug flag makes the simulation time very slow.
+DebugFlag('STIntervalPrint') - Prints EventIDs for Threads, Threads on what Cores every 50k cycles
+DebugFlag('ROI') - Prints out the cycle when we reach the parallel region in SynchroTrace. Prints out when the threads all join up.
+
+4) An example of this command with a debug flag is as follows:
+./build/X86_MESI_Two_Level/gem5.opt --debug-flags=STIntervalPrint ./configs/synchrotrace/synchrotrace_ruby.py --garnet-network=fixed --topology=Mesh --mesh-rows=8 --eventDir=$eventDir --outputDir=$outputDir --num-cpus=8 --num_threads=8 --num-dirs=8 --num-l2caches=8 --l1d_size=64kB --l1d_assoc=2 --l1i_size=64kB --l1i_assoc=2 --l2_size=128kB --l2_assoc=4 --cpi_iops=1 --cpi_flops=2 --masterFreq=1 2> fft.err";
+
+where the $eventDir points to the directory of the traces and $outputDir points to the desired output directory path.
+
+5) Necessary Dependencies:
+   gcc-4.8 or newer
+   swig-2.0.10 or newer
+   python-2.7.5 or newer
+   scons-2.3.0
+   zlib (and zlib-dev or zlib1g-dev)
+   m4
+
