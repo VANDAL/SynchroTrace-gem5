@@ -41,6 +41,7 @@ We have written a SynchroTrace configuration script to which arguments can be pa
 This script can be found at:
 
  <BASEDIR>/configs/example/synchrotrace_ruby.py for Ruby/Garnet Simulations
+
  <BASEDIR>/configs/example/synchrotrace_classic_memory.py for Classic Memory System Simulations
 
 3) Run SynchroTrace
