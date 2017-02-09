@@ -128,14 +128,19 @@ SynchroTrace::init()
     for (int i = 0; i < numThreads; i++)
         eventMap[i] = new deque<STEvent *>;
 
-    // Initiate thread maps and set master thread as active
+   // Initiate thread maps and set master thread as active
     threadMap.resize(numContexts);
     threadStartedMap.resize(numThreads);
     for (int i = 0; i < numThreads; i++)
         threadStartedMap[i] = false;
     threadStartedMap[0] = true;
 
-    // Initiate event list per core
+    // Initiate conditional wait state vector
+    cond_wait_states.resize(numContexts);
+    for (int i = 0; i < numContexts; i++)
+        cond_wait_states[i] = INIT;
+
+     // Initiate event list per core
     for (int i = 0; i < numContexts; i++)
         coreEvents.push_back(new SynchroTraceCoreEvent(this, i));
 
@@ -177,7 +182,7 @@ SynchroTrace::initStats()
 
     for (int i = 0; i < numThreads; i++) {
         threadContMap[i] = false;
-        threadMutexMap[i] = false;
+        threadMutexMap[i] = 0;
     }
 
     printThreadEventCounters = 0;
@@ -267,6 +272,15 @@ SynchroTrace::printThreadEvents()
                 DPRINTF(STIntervalPrint, "No Thread is on top Core %d\n", i);
             }
         }
+        for (int i = 0; i < numThreads; i++) {
+            if (!eventMap[i]->empty()) {
+
+                std::string thread_started =
+                        (threadStartedMap[i] == 1) ? "ON" : "OFF";
+                DPRINTF(STIntervalPrint, "Thread %d is %s\n",
+                        i, thread_started);
+            }
+        }
         printThreadEventCounters = 0;
     } else {
         printThreadEventCounters++;
@@ -310,6 +324,7 @@ void
 SynchroTrace::swapThreads(int proc_id)
 {
     int num_threads = threadMap[proc_id].size();
+    int curr_thread_id = threadMap[proc_id][0];
 
     // Check list of threads on the core to see if the thread is available
     for (int i = 1; i < num_threads; i++) {
@@ -336,12 +351,19 @@ SynchroTrace::swapThreads(int proc_id)
         if (topEvent->eventClass == STEvent::COMP) {
             moveThreadToHead(proc_id, i);
             break;
-        } else if (topEvent->eventClass == STEvent::THREAD_API) {
+        } else if (topEvent->eventClass == STEvent::THREAD_API &&
+                topEvent->eventType != STEvent::THREAD_JOIN) {
+            moveThreadToHead(proc_id, i);
+            break;
+        } else if ((topEvent->eventClass == STEvent::THREAD_API) &&
+                (topEvent->eventType == STEvent::THREAD_JOIN) &&
+                (eventMap[addresstoIDMap[topEvent->pthAddr]]->empty())) {
             moveThreadToHead(proc_id, i);
             break;
         // Communication Event
-        } else if (checkAllCommDependencies(topEvent) ||
-                threadMutexMap[topEvent->evThreadID] ||
+        } else if (((topEvent->eventClass == STEvent::COMM) &&
+                (checkAllCommDependencies(topEvent)) &&
+                (threadMutexMap[curr_thread_id] == 0)) ||
                 pcSkip) {
                 moveThreadToHead(proc_id, i);
                 break;
@@ -368,8 +390,9 @@ SynchroTrace::swapStalledThreads(int proc_id)
 
     // Swap if current thread is waiting on obtaining a mutex lock
     STEvent *this_event = eventMap[event_thread_id]->front();
-    if ((this_event->eventType == STEvent::MUTEX_LOCK) &&
-        !threadMutexMap[this_event->evThreadID]) {
+    if ((this_event->eventType == STEvent::THREAD_JOIN) ||
+        ((this_event->eventType == STEvent::MUTEX_LOCK) &&
+        (threadMutexMap[this_event->evThreadID] == 0))) {
         swapThreads(proc_id);
         if (!(coreEvents[proc_id]->scheduled())) {
             schedule(*(coreEvents[proc_id]), curTick());
@@ -626,7 +649,7 @@ SynchroTrace::progressEvents(int proc_id)
                     proc_id, new_sub_event->triggerTime);
         }
     } else {
-        // The first first sub-event contains an unprocessed message so we
+        // The first sub-event contains an unprocessed message so we
         // attempt to create and trigger it here.
         if (this_event->eventClass == STEvent::COMM) {
             // Check if communication dependencies have been met. If yes,
@@ -636,7 +659,7 @@ SynchroTrace::progressEvents(int proc_id)
             // synchronization, and we do not want to maintain false
             // dependencies.
             if ((checkCommDependency(top_sub_event->thisMsg, event_thread_id)
-                || threadMutexMap[event_thread_id]) || pcSkip) {
+                || threadMutexMap[event_thread_id] != 0) || (pcSkip)) {
                 triggerMsg(proc_id, event_thread_id, top_sub_event);
             } else {
                 // Check if dependency met next cycle
@@ -660,11 +683,14 @@ SynchroTrace::progressPthreadEvent(STEvent *this_event, int proc_id)
 
     ThreadID slave_thread_id;
     int slave_proc_id;
+    int wait_count;
+    bool all_thread_wait;
+    uint64_t mutexLockAddr;
     switch (this_event->eventType) {
       case STEvent::MUTEX_LOCK:
         if (mutexLocks.find(this_event->pthAddr) == mutexLocks.end()) {
           mutexLocks.insert(this_event->pthAddr);
-          threadMutexMap[this_event->evThreadID] = true;
+          threadMutexMap[this_event->evThreadID] = this_event->pthAddr;
           // Thread is now holding mutex lock.
 
           DPRINTF(STMutexLogger,"Thread %d locked mutex %d\n",
@@ -677,7 +703,7 @@ SynchroTrace::progressPthreadEvent(STEvent *this_event, int proc_id)
         mutex_ittr = mutexLocks.find(this_event->pthAddr);
         assert(mutex_ittr != mutexLocks.end());
         mutexLocks.erase(mutex_ittr);
-        threadMutexMap[this_event->evThreadID] = false;
+        threadMutexMap[this_event->evThreadID] = 0;
         // Thread returned mutex lock.
 
         DPRINTF(STMutexLogger,"Thread %d unlocked mutex %d\n",
@@ -738,8 +764,13 @@ SynchroTrace::progressPthreadEvent(STEvent *this_event, int proc_id)
                     threadContMap[*barr_ittr] = true;
                 }
                 threadWaitMap[this_event->pthAddr].clear();
+
+                // Release current thread
+                threadContMap[this_event->evThreadID] = false;
+                consumed_event = true;
             }
         } else {
+            // Release waiting threads
             threadContMap[this_event->evThreadID] = false;
             consumed_event = true;
         }
@@ -747,12 +778,81 @@ SynchroTrace::progressPthreadEvent(STEvent *this_event, int proc_id)
       break;
 
       case STEvent::COND_WAIT:
-        //TODO: Need to add Condition Wait/Signal code here.
-        this_event->subEventList->pop_front();
-        break;
+       // Mutex lock is released prior to waiting, acquired after conditional
+       // wait release
+       switch (cond_wait_states[this_event->evThreadID]) {
+          case INIT: // Push thread onto conditional wait queue
+            cond_wait_queue.push(this_event->evThreadID);
+            cond_wait_states[this_event->evThreadID] = QUEUED;
+
+            // Unlock mutex for conditional wait
+            mutex_ittr = mutexLocks.find(this_event->mutexLockAddr);
+            assert(mutex_ittr != mutexLocks.end());
+            // TODO - Fix the broadcast first call mutex unlock
+            if (mutex_ittr != mutexLocks.end())
+                mutexLocks.erase(mutex_ittr);
+            break;
+          case QUEUED: // Thread already on wait queue
+            break;
+          case SIGNALED: // Thread has been signaled, removed from wait queue
+            // TODO - Adding temp code to attempt to Acquire Mutex Lock
+            //
+            if (mutexLocks.find(this_event->mutexLockAddr) ==
+                                mutexLocks.end()) {
+                mutexLocks.insert(this_event->mutexLockAddr);
+                // Thread is now holding mutex lock.
+
+                DPRINTF(STMutexLogger,"Thread %d locked mutex %d\n",
+                      this_event->evThreadID, this_event->mutexLockAddr);
+                cond_wait_states[this_event->evThreadID] = INIT;
+                consumed_event = true;
+            }
+            break;
+       }
+         break;
 
       case STEvent::COND_SG:
-        this_event->subEventList->pop_front();
+        // Pop one thread from the conditional wait queue
+        if (!cond_wait_queue.empty()) {
+            cond_wait_states[cond_wait_queue.front()] = SIGNALED;
+            cond_wait_queue.pop();
+        }
+        consumed_event = true;
+        break;
+
+      case STEvent::COND_BR:
+
+        // TODO - Statement that incorporates unlocking mutex on first call
+        // of broadcast
+        //
+        // Unlock mutex lock if calling thread holds it
+        mutexLockAddr = threadMutexMap[this_event->evThreadID];
+        mutex_ittr = mutexLocks.find(mutexLockAddr);
+        assert(mutex_ittr != mutexLocks.end());
+        if (mutex_ittr != mutexLocks.end())
+            mutexLocks.erase(mutex_ittr);
+
+        // Check if all threads have reached the wait
+        wait_count = 0;
+        all_thread_wait = false;
+        for (int i = 0; i < numContexts; i++) {
+            if (cond_wait_states[i] == QUEUED)
+                    wait_count += 1;
+        }
+        all_thread_wait = (wait_count == (numContexts - 1)) ? true : false;
+
+        if (all_thread_wait) {
+            // Obtain mutex lock again
+            if (mutexLocks.find(mutexLockAddr) == mutexLocks.end()) {
+                mutexLocks.insert(mutexLockAddr);
+                consumed_event = true;
+                // Pop all the threads from the conditional wait queue
+                while (!cond_wait_queue.empty()) {
+                    cond_wait_states[cond_wait_queue.front()] = SIGNALED;
+                    cond_wait_queue.pop();
+                }
+            }
+        }
         break;
 
       case STEvent::SPIN_LOCK:

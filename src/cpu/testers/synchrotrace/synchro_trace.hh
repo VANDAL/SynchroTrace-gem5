@@ -65,6 +65,7 @@
 #include <cstdlib>
 #include <fstream>
 #include <iostream>
+#include <queue>
 #include <string>
 #include <vector>
 
@@ -254,6 +255,11 @@ class SynchroTrace : public MemObject
         WRITE,
     };
 
+    enum ConditionWaitType {
+        INIT,
+        QUEUED,
+        SIGNALED,
+    };
 
     // Python params passed to SynchroTrace object
 
@@ -343,6 +349,15 @@ class SynchroTrace : public MemObject
 
     /** Holds mutex locks in use */
     std::set<Addr> mutexLocks;
+
+    /** Holds which threads currently in conditional wait queue */
+    std::queue<ThreadID> cond_wait_queue;
+
+    /** Holds the conditional wait state for each thread */
+    std::vector<ConditionWaitType> cond_wait_states;
+    // 0 - Default state
+    // 1 - Queued in wait queue
+    // 2 - Signaled
 
     /** Holds spin locks in use */
     std::set<Addr> spinLocks;

@@ -235,13 +235,14 @@ class STEvent
         BARRIER_WAIT = 5,
         COND_WAIT = 6,
         COND_SG = 7,
-        SPIN_LOCK = 8,
-        SPIN_UNLOCK = 9,
-        SEM_INIT = 10,
-        SEM_WAIT = 11,
-        SEM_POST = 12,
-        SEM_GETV = 13,
-        SEM_DEST = 14
+        COND_BR = 8,
+        SPIN_LOCK = 9,
+        SPIN_UNLOCK = 10,
+        SEM_INIT = 11,
+        SEM_WAIT = 12,
+        SEM_POST = 13,
+        SEM_GETV = 14,
+        SEM_DEST = 15
     };
 
     /** Typedef for the memory address information vector */
