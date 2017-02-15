@@ -63,6 +63,7 @@
 #include <algorithm>
 #include <cassert>
 #include <cstdlib>
+#include <ctime>
 #include <fstream>
 #include <iostream>
 #include <queue>
@@ -77,6 +78,7 @@
 #include "debug/STDebug.hh"
 #include "debug/STEventPrint.hh"
 #include "debug/STIntervalPrint.hh"
+#include "debug/STIntervalPrintByHour.hh"
 #include "debug/STMutexLogger.hh"
 #include "mem/mem_object.hh"
 #include "mem/packet.hh"
@@ -299,6 +301,12 @@ class SynchroTrace : public MemObject
     int printThreadEventCounters;
 
     /**
+     * Counter used for 'STIntervalPrintByHour' to print event progression per
+     * hour
+     */
+    std::time_t hourCounter;
+
+    /**
      * Flag used for 'ROI' to print out entering and leaving the parallel
      * region
      */
@@ -403,6 +411,11 @@ class SynchroTrace : public MemObject
      * call back.
      */
     void checkCompletion();
+
+    /**
+     * Debug functions to print event id for every thread per hour.
+     */
+    void printThreadEventsPerHour();
 
     /**
      * Debug functions to view progress, prints event id for every thread

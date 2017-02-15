@@ -161,7 +161,7 @@ SynchroTrace::init()
     inputFilePointer = parser->getInputFilePointer();
     outputFilePointer = parser->getOutputFilePointer();
 
-    // Initialzie debug flags and mutex lock/barrier maps
+    // Initialize debug flags and mutex lock/barrier maps
     initStats();
 
     // Map threads to cores
@@ -185,6 +185,7 @@ SynchroTrace::initStats()
         threadMutexMap[i] = 0;
     }
 
+    hourCounter = std::time(NULL);
     printThreadEventCounters = 0;
     roiFlag = false;
     workerThreadCount = 0;
@@ -232,6 +233,9 @@ SynchroTrace::wakeup()
     // Terminates the simulation after checking if all the events are done
     checkCompletion();
 
+    // Prints thread status every hour
+    printThreadEventsPerHour();
+
     // Schedule to keep this back-end simulation thread running
     schedule(synchroTraceStartEvent, curTick() + clockPeriod() * wakeupFreq);
 }
@@ -252,6 +256,21 @@ SynchroTrace::wakeup(int proc_id)
 
     // Swap threads in cores if allowed
     swapStalledThreads(proc_id);
+}
+
+void
+SynchroTrace::printThreadEventsPerHour()
+{
+    if (std::difftime(std::time(NULL), hourCounter) >= 3600) {
+        hourCounter = std::time(NULL);
+        DPRINTF(STIntervalPrintByHour, "%s", std::ctime(&hourCounter));
+        for (int i = 0; i < numThreads; i++) {
+            if (!eventMap[i]->empty()) {
+                DPRINTF(STIntervalPrintByHour, "Thread %d: Event %d\n",
+                        i, eventMap[i]->front()->eventID);
+            }
+        }
+    }
 }
 
 void
