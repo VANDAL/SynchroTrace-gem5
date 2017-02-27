@@ -88,6 +88,7 @@
 #include "mem/ruby/system/RubyPort.hh"
 #include "mem/ruby/system/RubySystem.hh"
 #include "params/SynchroTrace.hh"
+#include "sim/stat_control.hh"
 #include "sim/system.hh"
 
 /* SynchroTrace's trace replay is a 1-CPI timing model that interfaces with
@@ -274,6 +275,12 @@ class SynchroTrace : public MemObject
     /** Number of threads set from the cmd line */
     int numThreads;
 
+    /** Start of synchronization region of interest */
+    int startSyncRegion;
+
+    /** Synchronization region of interest to instrument */
+    int instSyncRegion;
+
     /** Directory of Sigil Traces and Pthread metadata file */
     std::string eventDir;
 
@@ -382,8 +389,8 @@ class SynchroTrace : public MemObject
     /** Sigil trace file pointer */
     std::vector<gzifstream *> inputFilePointer;
 
-    /** Output file pointers */
-    std::vector<gzofstream *> outputFilePointer;
+    /** Sigil synchronization region file file pointer */
+    std::vector<std::vector <gzifstream *> > syncRegionFilePointers;
 
     /**
      * Number of threads (if less than number of cores). Otherwise,

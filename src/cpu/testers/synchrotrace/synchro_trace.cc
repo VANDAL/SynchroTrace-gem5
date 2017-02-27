@@ -66,6 +66,8 @@ SynchroTrace::SynchroTrace(const Params *p)
   : MemObject(p), synchroTraceStartEvent(this),
     masterID(p->system->getMasterId(name())),
     numCpus(p->num_cpus), numThreads(p->num_threads),
+    startSyncRegion(p->start_sync_region),
+    instSyncRegion(p->inst_sync_region),
     eventDir(p->event_dir), outDir(p->output_dir),
     wakeupFreq(p->master_wakeup_freq),
     useRuby(p->ruby),
@@ -150,16 +152,22 @@ SynchroTrace::init()
         schedule(*(coreEvents[i]), clockPeriod());
 
     // Create parser for pthread metadata and Sigil trace events
-    parser = new STParser(numThreads, eventMap, eventDir, outDir,
-                          memorySizeBytes, blockSizeBytes, blockSizeBits);
+    parser = new STParser(numThreads, eventMap, startSyncRegion,
+                    instSyncRegion, eventDir, outDir, memorySizeBytes,
+                    blockSizeBytes, blockSizeBits);
 
     // Parse Pthread Metadata
     addresstoIDMap = parser->getAddressToIDMap();
     barrierMap = parser->getBarrierMap();
 
-    // Get Sigil trace and output file pointers
+    // Get Sigil trace file pointers
     inputFilePointer = parser->getInputFilePointer();
-    outputFilePointer = parser->getOutputFilePointer();
+
+    // Get Sigil trace file synchronization region file pointers
+    syncRegionFilePointers = parser->getSynchroRegionFilePointers();
+
+    // Get start of synchronization region
+    startSyncRegion = parser->getStartSyncRegion();
 
     // Initialize debug flags and mutex lock/barrier maps
     initStats();
@@ -261,7 +269,7 @@ SynchroTrace::wakeup(int proc_id)
 void
 SynchroTrace::printThreadEventsPerHour()
 {
-    if (std::difftime(std::time(NULL), hourCounter) >= 3600) {
+    if (std::difftime(std::time(NULL), hourCounter) >= 60) {
         hourCounter = std::time(NULL);
         DPRINTF(STIntervalPrintByHour, "%s", std::ctime(&hourCounter));
         for (int i = 0; i < numThreads; i++) {
@@ -323,16 +331,32 @@ SynchroTrace::printEvent(ThreadID thread_id, bool is_end)
 void
 SynchroTrace::checkCompletion()
 {
-    // Termination condition: terminate when thread 0 is completed.
-    if (eventMap[0]->empty()) {
-        for (int i = 0; i < numThreads; i++) {
-            if (inputFilePointer[i] != NULL) {
-                inputFilePointer[i]->close();
-                delete inputFilePointer[i];
+    bool terminate = true;
+
+    if (startSyncRegion == 0) {
+        // Termination condition: terminate when thread 0 is completed.
+        // Occurs when entire benchmark is simulated
+        if (!eventMap[0]->empty())
+            terminate = false;
+
+    } else {
+        // Termination condition: terminate when all threads are completed.
+        // Occurs when synchronization region is simulated
+        for (int TID=0; TID < numThreads; TID++) {
+            if (!eventMap[TID]->empty()) {
+                terminate = false;
+                break;
             }
-            if (outputFilePointer[i] != NULL) {
-                outputFilePointer[i]->close();
-                delete outputFilePointer[i];
+        }
+    }
+
+    if (terminate) {
+        if (startSyncRegion == 0) {
+            for (int i = 0; i < numThreads; i++) {
+                if (inputFilePointer[i] != NULL) {
+                    inputFilePointer[i]->close();
+                    delete inputFilePointer[i];
+                }
             }
         }
         exitSimLoop("SynchroTrace completed");
@@ -720,8 +744,9 @@ SynchroTrace::progressPthreadEvent(STEvent *this_event, int proc_id)
 
       case STEvent::MUTEX_UNLOCK:
         mutex_ittr = mutexLocks.find(this_event->pthAddr);
-        assert(mutex_ittr != mutexLocks.end());
-        mutexLocks.erase(mutex_ittr);
+        //assert(mutex_ittr != mutexLocks.end());
+        if (mutex_ittr != mutexLocks.end())
+            mutexLocks.erase(mutex_ittr);
         threadMutexMap[this_event->evThreadID] = 0;
         // Thread returned mutex lock.
 
@@ -755,7 +780,7 @@ SynchroTrace::progressPthreadEvent(STEvent *this_event, int proc_id)
         break;
 
       case STEvent::THREAD_JOIN:
-        assert(threadStartedMap[addresstoIDMap[this_event->pthAddr]]);
+        //assert(threadStartedMap[addresstoIDMap[this_event->pthAddr]]);
         if (eventMap[addresstoIDMap[this_event->pthAddr]]->empty())
             consumed_event = true;
         workerThreadCount--;
@@ -775,6 +800,11 @@ SynchroTrace::progressPthreadEvent(STEvent *this_event, int proc_id)
             }
 
             if (checkBarriers(this_event)) {
+                if (startSyncRegion != 0) {
+                   // Dump stats every barrier if synchronization region
+                   Stats::schedStatEvent(true, true, curTick(), 0);
+                }
+
                 set<ThreadID>::iterator barr_ittr =
                     barrierMap[this_event->pthAddr].begin();
                 for (; barr_ittr != barrierMap[this_event->pthAddr].end();
@@ -806,10 +836,11 @@ SynchroTrace::progressPthreadEvent(STEvent *this_event, int proc_id)
 
             // Unlock mutex for conditional wait
             mutex_ittr = mutexLocks.find(this_event->mutexLockAddr);
-            assert(mutex_ittr != mutexLocks.end());
+            //assert(mutex_ittr != mutexLocks.end());
             // TODO - Fix the broadcast first call mutex unlock
             if (mutex_ittr != mutexLocks.end())
                 mutexLocks.erase(mutex_ittr);
+            // Temporarily allow Thread to keep mutex address to acquire
             break;
           case QUEUED: // Thread already on wait queue
             break;
@@ -847,7 +878,7 @@ SynchroTrace::progressPthreadEvent(STEvent *this_event, int proc_id)
         // Unlock mutex lock if calling thread holds it
         mutexLockAddr = threadMutexMap[this_event->evThreadID];
         mutex_ittr = mutexLocks.find(mutexLockAddr);
-        assert(mutex_ittr != mutexLocks.end());
+        //assert(mutex_ittr != mutexLocks.end());
         if (mutex_ittr != mutexLocks.end())
             mutexLocks.erase(mutex_ittr);
 

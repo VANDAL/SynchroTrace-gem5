@@ -177,6 +177,18 @@ class STParser
     /** Number of threads set from the cmd line */
     int numThreads;
 
+    /** Start of synchronization region of interest */
+    int startSyncRegion;
+
+    /** Synchronization region of interest to instrument */
+    int instSyncRegion;
+
+    /** Tracker for which region is being simulated by each thread*/
+    std::vector<int> regionCounter;
+
+    /** Indicator for which region is instrumented */
+    int instRegion;
+
     // File Directories
     /** Directory of Sigil Traces and Pthread metadata file */
     std::string eventDir;
@@ -202,8 +214,8 @@ class STParser
     /** Sigil trace file pointers */
     std::vector<gzifstream *> inputFilePointer;
 
-    /** Output file pointers */
-    std::vector<gzofstream *> outputFilePointer;
+    /** Sigil trace region of interest file pointers */
+    std::vector<std::vector <gzifstream *> > syncRegionFilePointers;
 
   public:
     /** Return map of Pthread addresses/Thread ID */
@@ -221,10 +233,16 @@ class STParser
         return inputFilePointer;
     };
 
-    /** Return output file pointers */
-    std::vector<gzofstream *> getOutputFilePointer() {
-        return outputFilePointer;
+    /** Return sigil synchronization region file pointers */
+    std::vector<std::vector<gzifstream *> > getSynchroRegionFilePointers() {
+        return syncRegionFilePointers;
     };
+
+    /** Return start of synchronization region */
+    int getStartSyncRegion() {
+        return startSyncRegion;
+    };
+
 
     /**
      * Central event map: list of pointers to event deques of each thread.
@@ -244,6 +262,7 @@ class STParser
 
     /** Default Parser Constructor */
     STParser(int num_threads, std::deque<STEvent *> **event_map,
+             int start_sync_region, int inst_sync_region,
              std::string event_dir, std::string output_dir,
              uint64_t mem_size_bytes, int block_size_bytes,
              int block_size_bits) {
@@ -254,6 +273,8 @@ class STParser
         memoryBytes = mem_size_bytes;
         blockBytes = block_size_bytes;
         blockBits = block_size_bits;
+        startSyncRegion = start_sync_region;
+        instSyncRegion = inst_sync_region;
         processPthreadFile();
         initSigilFilePointers();
         numCacheLines = mem_size_bytes / block_size_bytes;

@@ -135,29 +135,87 @@ STParser::processBarrierEvent(string line, size_t star_pos){
 void
 STParser::initSigilFilePointers()
 {
-    inputFilePointer.resize(numThreads);
-    outputFilePointer.resize(numThreads);
+    // A vector of trace filter pointers are used if synchronization region of
+    // interest options are enabled.
+    // Each synchronization region will replay
+    // (instSyncRegion - startSyncRegion) regions
 
-    for (int i = 0; i < numThreads; i++) {
-        std::string fname_str = csprintf("%s/sigil.events.out-%d.gz",
-                                         eventDir.c_str(), i + 1);
+    if (startSyncRegion != 0) {
+        // Start region counter at 0
+        regionCounter.resize(numThreads);
+        for (int TID = 0; TID < numThreads; TID++)
+            regionCounter[TID] = 0;
+
+        // Instrumented region is the last region simulated
+        // Anytime instRegion is checked, a (+1) must be added to the master
+        // thread to account for the serial region
+        instRegion = instSyncRegion - startSyncRegion;
+
+        syncRegionFilePointers.resize(numThreads);
+
+        // Thread 0 will have one extra region to set create threads
+        syncRegionFilePointers[0].resize(instSyncRegion - startSyncRegion + 1);
+
+        // Master Thread creation region
+        std::string fname_str = csprintf("%sthr_create_region.gz",
+                        eventDir.c_str());
         char *fname = strdup(fname_str.c_str());
-
-        inputFilePointer[i] = new gzifstream(fname);
-        if (inputFilePointer[i]->fail()) {
+        syncRegionFilePointers[0][0] = new gzifstream(fname);
+        if (syncRegionFilePointers[0][0]->fail())
             panic("Failed to open file: %s\n", fname);
-        }
-
-        fname_str = csprintf("%s/eventTimeOutput-%d.csv.gz",
-                             outputDir.c_str(), i + 1);
-        fname = strdup(fname_str.c_str());
-
-        outputFilePointer[i] = new gzofstream(fname);
-        if (outputFilePointer[i]->fail()) {
-            panic("ERROR!: Not able to create event file %s. Aborting!!\n",
-                  fname);
-        }
         free(fname);
+
+        // Master Thread regions
+        for (int region = 1; region < (instSyncRegion - startSyncRegion + 2);
+                        region++) {
+            std::string fname_str = csprintf(
+                            "%s1/sigil.events.out-1-%d.gz",
+                            eventDir.c_str(), region + startSyncRegion - 1);
+            char *fname = strdup(fname_str.c_str());
+            syncRegionFilePointers[0][region] = new gzifstream(fname);
+
+            if (syncRegionFilePointers[0][region]->fail())
+                panic("Failed to open file: %s\n", fname);
+            free(fname);
+        }
+
+        // Initialize trace pointers to the number of synchronization regions
+        // simulated
+        for (int TID = 1; TID < numThreads; TID++)
+            syncRegionFilePointers[TID].resize(instSyncRegion -
+                            startSyncRegion + 1);
+
+        // Slave Thread regions
+        for (int TID = 1; TID < numThreads; TID++) {
+            for (int region = 0; region < (instSyncRegion -
+                                    startSyncRegion + 1) ;
+                            region++) {
+                std::string fname_str = csprintf(
+                                "%s%d/sigil.events.out-%d-%d.gz",
+                                eventDir.c_str(), TID + 1, TID + 1, region +
+                                startSyncRegion);
+                char *fname = strdup(fname_str.c_str());
+                syncRegionFilePointers[TID][region] = new gzifstream(fname);
+
+                if (syncRegionFilePointers[TID][region]->fail())
+                    panic("Failed to open file: %s\n", fname);
+                free(fname);
+            }
+        }
+    } else {
+        // Replaying full benchmark
+        inputFilePointer.resize(numThreads);
+
+        for (int i = 0; i < numThreads; i++) {
+            std::string fname_str = csprintf("%s/sigil.events.out-%d.gz",
+                                             eventDir.c_str(), i + 1);
+            char *fname = strdup(fname_str.c_str());
+
+            inputFilePointer[i] = new gzifstream(fname);
+            if (inputFilePointer[i]->fail())
+                panic("Failed to open file: %s\n", fname);
+            free(fname);
+        }
     }
 }
 
@@ -178,11 +236,31 @@ void
 STParser::readEventFile(ThreadID thread_id)
 {
     string this_event;
+    // Read event file for synchronization region
 
-    for (FileBlockSize count = 0; count < readBlock; count++) {
-        if (!getline(*(inputFilePointer[thread_id]), this_event)) {
-            break;
-        } else {
+    if (startSyncRegion != 0) {
+        for (FileBlockSize count = 0; count < readBlock; count++) {
+            if (!getline(*(syncRegionFilePointers[thread_id]
+                                    [regionCounter[thread_id]]),
+                                    this_event)) {
+                // Handle case that we ran out of events in region. Move to
+                // next region, unless we are in the instrumentated region.
+                if (((regionCounter[thread_id] != instRegion) &&
+                                (thread_id != 0)) || ((regionCounter[thread_id]
+                                                != instRegion + 1) &&
+                                        (thread_id == 0))) {
+                    syncRegionFilePointers[thread_id]
+                            [regionCounter[thread_id]]->close();
+                    regionCounter[thread_id]++;
+                    getline(*(syncRegionFilePointers[thread_id]
+                                            [regionCounter[thread_id]]),
+                                            this_event);
+                } else {
+                    // End of instrumented region
+                    break;
+                }
+
+            }
             size_t hash_pos = this_event.find('#');
             size_t caret_pos = this_event.find('^');
 
@@ -192,6 +270,24 @@ STParser::readEventFile(ThreadID thread_id)
                 processPthreadEvent(this_event, caret_pos);
             } else {
                 processCompEvent(this_event);
+            }
+        }
+    } else {
+        // Reading event file for a full benchmark
+        for (FileBlockSize count = 0; count < readBlock; count++) {
+            if (!getline(*(inputFilePointer[thread_id]), this_event)) {
+                break;
+            } else {
+                size_t hash_pos = this_event.find('#');
+                size_t caret_pos = this_event.find('^');
+
+                if (hash_pos != string::npos) {
+                    processCommEvent(this_event, hash_pos);
+                } else if (caret_pos != string::npos){
+                    processPthreadEvent(this_event, caret_pos);
+                } else {
+                    processCompEvent(this_event);
+                }
             }
         }
     }

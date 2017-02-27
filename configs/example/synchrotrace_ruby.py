@@ -87,6 +87,10 @@ parser.add_option("--num-threads", type="int",
                   help="Number of threads")
 parser.add_option("--event-dir", type="string", default="",
                   help="Path to the directory that contains the event traces")
+parser.add_option("--start-sync-region", type="int", default=0,
+                  help="Start simulation of syncronization region")
+parser.add_option("--inst-sync-region", type="int", default=0,
+                  help="Select synchronization region to instrument")
 parser.add_option("--output-dir", type="string", default="",
                   help="Path to the directory where to dump the output")
 parser.add_option("--master-freq", type="int", default=1,
@@ -129,7 +133,9 @@ tester = SynchroTrace(num_cpus = options.num_cpus,
       ruby = options.ruby,
       block_size_bytes = options.cacheline_size,
       mem_size_bytes = toMemorySize(options.mem_size),
-      pc_skip=options.pc_skip)
+      pc_skip = options.pc_skip,
+      start_sync_region = options.start_sync_region,
+      inst_sync_region = options.inst_sync_region)
 
 # Create the system
 system = System(cache_line_size = options.cacheline_size,

@@ -100,4 +100,6 @@ class SynchroTrace(MemObject):
     block_size_bytes = Param.Int(64, "Cache Line Size")
     mem_size_bytes = Param.UInt64("Memory Size")
     pc_skip = Param.Bool("Skip P->C dependencies")
+    start_sync_region = Param.Int("Start of synchronization region")
+    inst_sync_region = Param.Int("Synchronization region to instrument")
     system = Param.System(Parent.any, "System we belong to")
