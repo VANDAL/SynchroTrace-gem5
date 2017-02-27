@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2013 ARM Limited
+ * Copyright (c) 2012-2013,2016 ARM Limited
  * All rights reserved.
  *
  * The license below extends only to copyright in the software and shall
@@ -90,8 +90,6 @@ class FALRU : public BaseTags
   public:
     /** Typedef the block type used in this class. */
     typedef FALRUBlk BlkType;
-    /** Typedef a list of pointers to the local block type. */
-    typedef std::list<FALRUBlk*> BlkList;
 
   protected:
     /** Array of pointers to blocks at the cache size  boundaries. */
@@ -184,19 +182,17 @@ public:
      * Returns the access latency and inCache flags as a side effect.
      * @param addr The address to look for.
      * @param is_secure True if the target memory space is secure.
-     * @param asid The address space ID.
      * @param lat The latency of the access.
      * @param inCache The FALRUBlk::inCache flags.
      * @return Pointer to the cache block.
      */
     CacheBlk* accessBlock(Addr addr, bool is_secure, Cycles &lat,
-                          int context_src, int *inCache);
+                          int *inCache);
 
     /**
      * Just a wrapper of above function to conform with the base interface.
      */
-    CacheBlk* accessBlock(Addr addr, bool is_secure, Cycles &lat,
-                          int context_src) override;
+    CacheBlk* accessBlock(Addr addr, bool is_secure, Cycles &lat) override;
 
     /**
      * Find the block in the cache, do not update the replacement data.
@@ -215,46 +211,6 @@ public:
     CacheBlk* findVictim(Addr addr) override;
 
     void insertBlock(PacketPtr pkt, CacheBlk *blk) override;
-
-    /**
-     * Return the block size of this cache.
-     * @return The block size.
-     */
-    unsigned
-    getBlockSize() const
-    {
-        return blkSize;
-    }
-
-    /**
-     * Return the subblock size of this cache, always the block size.
-     * @return The block size.
-     */
-    unsigned
-    getSubBlockSize() const
-    {
-        return blkSize;
-    }
-
-    /**
-     * Return the number of sets this cache has
-     * @return The number of sets.
-     */
-    unsigned
-    getNumSets() const override
-    {
-        return 1;
-    }
-
-    /**
-     * Return the number of ways this cache has
-     * @return The number of ways.
-     */
-    unsigned
-    getNumWays() const override
-    {
-        return numBlocks;
-    }
 
     /**
      * Find the cache block given set and way

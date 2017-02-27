@@ -305,8 +305,7 @@ Cache::access(PacketPtr pkt, CacheBlk *&blk, Cycles &lat,
                 writebacks.push_back(writebackBlk(old_blk));
             else
                 writebacks.push_back(cleanEvictBlk(old_blk));
-            tags->invalidate(old_blk);
-            old_blk->invalidate();
+            invalidateBlock(old_blk);
         }
 
         blk = nullptr;
@@ -315,11 +314,9 @@ Cache::access(PacketPtr pkt, CacheBlk *&blk, Cycles &lat,
         return false;
     }
 
-    ContextID id = pkt->req->hasContextId() ?
-        pkt->req->contextId() : InvalidContextID;
     // Here lat is the value passed as parameter to accessBlock() function
     // that can modify its value.
-    blk = tags->accessBlock(pkt->getAddr(), pkt->isSecure(), lat, id);
+    blk = tags->accessBlock(pkt->getAddr(), pkt->isSecure(), lat);
 
     DPRINTF(Cache, "%s %s\n", pkt->print(),
             blk ? "hit " + blk->print() : "miss");
@@ -585,7 +582,7 @@ Cache::promoteWholeLineWrites(PacketPtr pkt)
 bool
 Cache::recvTimingReq(PacketPtr pkt)
 {
-    DPRINTF(CacheTags, "%s tags: %s\n", __func__, tags->print());
+    DPRINTF(CacheTags, "%s tags:\n%s\n", __func__, tags->print());
 
     assert(pkt->isRequest());
 
@@ -1127,7 +1124,7 @@ Cache::recvAtomic(PacketPtr pkt)
 
         tempBlockWriteback = (blk->isDirty() || writebackClean) ?
             writebackBlk(blk) : cleanEvictBlk(blk);
-        blk->invalidate();
+        invalidateBlock(blk);
     }
 
     if (pkt->needsResponse()) {
@@ -1531,7 +1528,7 @@ Cache::recvTimingResp(PacketPtr pkt)
             else
                 allocateWriteBuffer(wcPkt, forward_time);
         }
-        blk->invalidate();
+        invalidateBlock(blk);
     }
 
     DPRINTF(CacheVerbose, "%s: Leaving with %s\n", __func__, pkt->print());
@@ -1636,6 +1633,9 @@ Cache::writebackVisitor(CacheBlk &blk)
         Request request(tags->regenerateBlkAddr(blk.tag, blk.set),
                         blkSize, 0, Request::funcMasterId);
         request.taskId(blk.task_id);
+        if (blk.isSecure()) {
+            request.setFlags(Request::SECURE);
+        }
 
         Packet packet(&request, MemCmd::WriteReq);
         packet.dataStatic(blk.data);
@@ -1657,8 +1657,7 @@ Cache::invalidateVisitor(CacheBlk &blk)
 
     if (blk.isValid()) {
         assert(!blk.isDirty());
-        tags->invalidate(&blk);
-        blk.invalidate();
+        invalidateBlock(&blk);
     }
 
     return true;

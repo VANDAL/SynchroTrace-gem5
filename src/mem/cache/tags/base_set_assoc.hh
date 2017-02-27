@@ -78,8 +78,6 @@ class BaseSetAssoc : public BaseTags
   public:
     /** Typedef the block type used in this tag store. */
     typedef CacheBlk BlkType;
-    /** Typedef for a list of pointers to the local block class. */
-    typedef std::list<BlkType*> BlkList;
     /** Typedef the set type used in this tag store. */
     typedef CacheSet<CacheBlk> SetType;
 
@@ -127,47 +125,6 @@ public:
     virtual ~BaseSetAssoc();
 
     /**
-     * Return the block size.
-     * @return the block size.
-     */
-    unsigned
-    getBlockSize() const
-    {
-        return blkSize;
-    }
-
-    /**
-     * Return the subblock size. In the case of BaseSetAssoc it is always
-     * the block size.
-     * @return The block size.
-     */
-    unsigned
-    getSubBlockSize() const
-    {
-        return blkSize;
-    }
-
-    /**
-     * Return the number of sets this cache has
-     * @return The number of sets.
-     */
-    unsigned
-    getNumSets() const override
-    {
-        return numSets;
-    }
-
-    /**
-     * Return the number of ways this cache has
-     * @return The number of ways.
-     */
-    unsigned
-    getNumWays() const override
-    {
-        return assoc;
-    }
-
-    /**
      * Find the cache block given set and way
      * @param set The set of the block.
      * @param way The way of the block.
@@ -198,12 +155,10 @@ public:
      * side effect.
      * @param addr The address to find.
      * @param is_secure True if the target memory space is secure.
-     * @param asid The address space ID.
      * @param lat The access latency.
      * @return Pointer to the cache block if found.
      */
-    CacheBlk* accessBlock(Addr addr, bool is_secure, Cycles &lat,
-                          int context_src) override
+    CacheBlk* accessBlock(Addr addr, bool is_secure, Cycles &lat) override
     {
         Addr tag = extractTag(addr);
         int set = extractSet(addr);

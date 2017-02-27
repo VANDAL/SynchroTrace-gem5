@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2015, University of Kaiserslautern
+ * Copyright (c) 2016, Dresden University of Technology (TU Dresden)
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -31,10 +32,11 @@
  *
  * Authors:
  *    Matthias Jung
+ *    Christian Menard
  */
 
-#ifndef SC_EXT_H_
-#define SC_EXT_H_
+#ifndef __SC_EXT_HH__
+#define __SC_EXT_HH__
 
 #include <systemc.h>
 #include <tlm.h>
@@ -43,20 +45,31 @@
 
 #include "mem/packet.hh"
 
-class gem5Extension: public tlm::tlm_extension<gem5Extension>
+namespace Gem5SystemC
+{
+
+class Gem5Extension: public tlm::tlm_extension<Gem5Extension>
 {
   public:
-    gem5Extension(PacketPtr packet);
+    Gem5Extension(PacketPtr packet);
 
     virtual tlm_extension_base* clone() const;
     virtual void copy_from(const tlm_extension_base& ext);
 
-    static gem5Extension& getExtension(const tlm::tlm_generic_payload *payload);
-    static gem5Extension& getExtension(const tlm::tlm_generic_payload &payload);
+    static Gem5Extension&
+        getExtension(const tlm::tlm_generic_payload *payload);
+    static Gem5Extension&
+        getExtension(const tlm::tlm_generic_payload &payload);
     PacketPtr getPacket();
+
+    bool isPipeThrough() const { return pipeThrough; }
+    void setPipeThrough() { pipeThrough = true; }
 
   private:
     PacketPtr Packet;
+    bool pipeThrough;
 };
+
+}
 
 #endif

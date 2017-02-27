@@ -43,6 +43,7 @@
  *          Steve Reinhardt
  *          Andrew Bardsley
  *          Matthias Jung
+ *          Christian Menard
  */
 
 /**
@@ -56,15 +57,16 @@
  * most one Gem5Module instantiated in any simulation.
  */
 
+#include "base/misc.hh"
 #include "base/pollevent.hh"
 #include "base/trace.hh"
 #include "debug/Event.hh"
+#include "sc_module.hh"
 #include "sim/async.hh"
 #include "sim/core.hh"
 #include "sim/eventq.hh"
 #include "sim/sim_exit.hh"
 #include "sim/stat_control.hh"
-#include "sc_module.hh"
 
 namespace Gem5SystemC
 {
@@ -77,7 +79,7 @@ setTickFrequency()
     ::setClockFrequency(1000000000000);
 }
 
-Module::Module(sc_core::sc_module_name name) : sc_core::sc_module(name),
+Module::Module(sc_core::sc_module_name name) : sc_core::sc_channel(name),
     in_simulate(false)
 {
     SC_METHOD(eventLoop);

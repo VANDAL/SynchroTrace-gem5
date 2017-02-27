@@ -53,7 +53,7 @@ using namespace std;
 using namespace TheISA;
 
 SyscallReturn
-unimplementedFunc(SyscallDesc *desc, int callnum, LiveProcess *process,
+unimplementedFunc(SyscallDesc *desc, int callnum, Process *process,
                   ThreadContext *tc)
 {
     fatal("syscall %s (#%d) unimplemented.", desc->name(), callnum);
@@ -63,7 +63,7 @@ unimplementedFunc(SyscallDesc *desc, int callnum, LiveProcess *process,
 
 
 SyscallReturn
-ignoreFunc(SyscallDesc *desc, int callnum, LiveProcess *process,
+ignoreFunc(SyscallDesc *desc, int callnum, Process *process,
            ThreadContext *tc)
 {
     if (desc->needWarning()) {
@@ -76,7 +76,7 @@ ignoreFunc(SyscallDesc *desc, int callnum, LiveProcess *process,
 
 
 SyscallReturn
-exitFunc(SyscallDesc *desc, int callnum, LiveProcess *process,
+exitFunc(SyscallDesc *desc, int callnum, Process *process,
          ThreadContext *tc)
 {
     if (process->system->numRunningContexts() == 1) {
@@ -94,7 +94,7 @@ exitFunc(SyscallDesc *desc, int callnum, LiveProcess *process,
 
 
 SyscallReturn
-exitGroupFunc(SyscallDesc *desc, int callnum, LiveProcess *process,
+exitGroupFunc(SyscallDesc *desc, int callnum, Process *process,
               ThreadContext *tc)
 {
     // halt all threads belonging to this process
@@ -114,14 +114,14 @@ exitGroupFunc(SyscallDesc *desc, int callnum, LiveProcess *process,
 
 
 SyscallReturn
-getpagesizeFunc(SyscallDesc *desc, int num, LiveProcess *p, ThreadContext *tc)
+getpagesizeFunc(SyscallDesc *desc, int num, Process *p, ThreadContext *tc)
 {
     return (int)PageBytes;
 }
 
 
 SyscallReturn
-brkFunc(SyscallDesc *desc, int num, LiveProcess *p, ThreadContext *tc)
+brkFunc(SyscallDesc *desc, int num, Process *p, ThreadContext *tc)
 {
     // change brk addr to first arg
     int index = 0;
@@ -167,37 +167,29 @@ brkFunc(SyscallDesc *desc, int num, LiveProcess *p, ThreadContext *tc)
 
 
 SyscallReturn
-closeFunc(SyscallDesc *desc, int num, LiveProcess *p, ThreadContext *tc)
+closeFunc(SyscallDesc *desc, int num, Process *p, ThreadContext *tc)
 {
     int index = 0;
     int tgt_fd = p->getSyscallArg(tc, index);
 
-    int sim_fd = p->getSimFD(tgt_fd);
-    if (sim_fd < 0)
-        return -EBADF;
-
-    int status = 0;
-    if (sim_fd > 2)
-        status = close(sim_fd);
-    if (status >= 0)
-        p->resetFDEntry(tgt_fd);
-    return status;
+    return p->fds->closeFDEntry(tgt_fd);
 }
 
 
 SyscallReturn
-readFunc(SyscallDesc *desc, int num, LiveProcess *p, ThreadContext *tc)
+readFunc(SyscallDesc *desc, int num, Process *p, ThreadContext *tc)
 {
     int index = 0;
     int tgt_fd = p->getSyscallArg(tc, index);
     Addr bufPtr = p->getSyscallArg(tc, index);
     int nbytes = p->getSyscallArg(tc, index);
-    BufferArg bufArg(bufPtr, nbytes);
 
-    int sim_fd = p->getSimFD(tgt_fd);
-    if (sim_fd < 0)
+    auto hbfdp = std::dynamic_pointer_cast<HBFDEntry>((*p->fds)[tgt_fd]);
+    if (!hbfdp)
         return -EBADF;
+    int sim_fd = hbfdp->getSimFD();
 
+    BufferArg bufArg(bufPtr, nbytes);
     int bytes_read = read(sim_fd, bufArg.bufferPtr(), nbytes);
 
     if (bytes_read > 0)
@@ -207,18 +199,19 @@ readFunc(SyscallDesc *desc, int num, LiveProcess *p, ThreadContext *tc)
 }
 
 SyscallReturn
-writeFunc(SyscallDesc *desc, int num, LiveProcess *p, ThreadContext *tc)
+writeFunc(SyscallDesc *desc, int num, Process *p, ThreadContext *tc)
 {
     int index = 0;
     int tgt_fd = p->getSyscallArg(tc, index);
     Addr bufPtr = p->getSyscallArg(tc, index);
     int nbytes = p->getSyscallArg(tc, index);
-    BufferArg bufArg(bufPtr, nbytes);
 
-    int sim_fd = p->getSimFD(tgt_fd);
-    if (sim_fd < 0)
+    auto hbfdp = std::dynamic_pointer_cast<HBFDEntry>((*p->fds)[tgt_fd]);
+    if (!hbfdp)
         return -EBADF;
+    int sim_fd = hbfdp->getSimFD();
 
+    BufferArg bufArg(bufPtr, nbytes);
     bufArg.copyIn(tc->getMemProxy());
 
     int bytes_written = write(sim_fd, bufArg.bufferPtr(), nbytes);
@@ -230,16 +223,17 @@ writeFunc(SyscallDesc *desc, int num, LiveProcess *p, ThreadContext *tc)
 
 
 SyscallReturn
-lseekFunc(SyscallDesc *desc, int num, LiveProcess *p, ThreadContext *tc)
+lseekFunc(SyscallDesc *desc, int num, Process *p, ThreadContext *tc)
 {
     int index = 0;
     int tgt_fd = p->getSyscallArg(tc, index);
     uint64_t offs = p->getSyscallArg(tc, index);
     int whence = p->getSyscallArg(tc, index);
 
-    int sim_fd = p->getSimFD(tgt_fd);
-    if (sim_fd < 0)
+    auto ffdp = std::dynamic_pointer_cast<FileFDEntry>((*p->fds)[tgt_fd]);
+    if (!ffdp)
         return -EBADF;
+    int sim_fd = ffdp->getSimFD();
 
     off_t result = lseek(sim_fd, offs, whence);
 
@@ -248,7 +242,7 @@ lseekFunc(SyscallDesc *desc, int num, LiveProcess *p, ThreadContext *tc)
 
 
 SyscallReturn
-_llseekFunc(SyscallDesc *desc, int num, LiveProcess *p, ThreadContext *tc)
+_llseekFunc(SyscallDesc *desc, int num, Process *p, ThreadContext *tc)
 {
     int index = 0;
     int tgt_fd = p->getSyscallArg(tc, index);
@@ -257,9 +251,10 @@ _llseekFunc(SyscallDesc *desc, int num, LiveProcess *p, ThreadContext *tc)
     Addr result_ptr = p->getSyscallArg(tc, index);
     int whence = p->getSyscallArg(tc, index);
 
-    int sim_fd = p->getSimFD(tgt_fd);
-    if (sim_fd < 0)
+    auto ffdp = std::dynamic_pointer_cast<FileFDEntry>((*p->fds)[tgt_fd]);
+    if (!ffdp)
         return -EBADF;
+    int sim_fd = ffdp->getSimFD();
 
     uint64_t offset = (offset_high << 32) | offset_low;
 
@@ -277,7 +272,7 @@ _llseekFunc(SyscallDesc *desc, int num, LiveProcess *p, ThreadContext *tc)
 
 
 SyscallReturn
-munmapFunc(SyscallDesc *desc, int num, LiveProcess *p, ThreadContext *tc)
+munmapFunc(SyscallDesc *desc, int num, Process *p, ThreadContext *tc)
 {
     // With mmap more fully implemented, it might be worthwhile to bite
     // the bullet and implement munmap. Should allow us to reuse simulated
@@ -289,7 +284,7 @@ munmapFunc(SyscallDesc *desc, int num, LiveProcess *p, ThreadContext *tc)
 const char *hostname = "m5.eecs.umich.edu";
 
 SyscallReturn
-gethostnameFunc(SyscallDesc *desc, int num, LiveProcess *p, ThreadContext *tc)
+gethostnameFunc(SyscallDesc *desc, int num, Process *p, ThreadContext *tc)
 {
     int index = 0;
     Addr bufPtr = p->getSyscallArg(tc, index);
@@ -304,7 +299,7 @@ gethostnameFunc(SyscallDesc *desc, int num, LiveProcess *p, ThreadContext *tc)
 }
 
 SyscallReturn
-getcwdFunc(SyscallDesc *desc, int num, LiveProcess *p, ThreadContext *tc)
+getcwdFunc(SyscallDesc *desc, int num, Process *p, ThreadContext *tc)
 {
     int result = 0;
     int index = 0;
@@ -322,7 +317,7 @@ getcwdFunc(SyscallDesc *desc, int num, LiveProcess *p, ThreadContext *tc)
         strncpy((char *)buf.bufferPtr(), cwd.c_str(), size);
         result = cwd.length();
     } else {
-        if (getcwd((char *)buf.bufferPtr(), size) != NULL) {
+        if (getcwd((char *)buf.bufferPtr(), size)) {
             result = strlen((char *)buf.bufferPtr());
         } else {
             result = -1;
@@ -336,15 +331,15 @@ getcwdFunc(SyscallDesc *desc, int num, LiveProcess *p, ThreadContext *tc)
 
 /// Target open() handler.
 SyscallReturn
-readlinkFunc(SyscallDesc *desc, int callnum, LiveProcess *process,
-         ThreadContext *tc)
+readlinkFunc(SyscallDesc *desc, int callnum, Process *process,
+             ThreadContext *tc)
 {
     return readlinkFunc(desc, callnum, process, tc, 0);
 }
 
 SyscallReturn
-readlinkFunc(SyscallDesc *desc, int num, LiveProcess *p, ThreadContext *tc,
-        int index)
+readlinkFunc(SyscallDesc *desc, int num, Process *p, ThreadContext *tc,
+             int index)
 {
     string path;
 
@@ -365,7 +360,7 @@ readlinkFunc(SyscallDesc *desc, int num, LiveProcess *p, ThreadContext *tc,
     } else {
         // Emulate readlink() called on '/proc/self/exe' should return the
         // absolute path of the binary running in the simulated system (the
-        // LiveProcess' executable). It is possible that using this path in
+        // Process' executable). It is possible that using this path in
         // the simulated system will result in unexpected behavior if:
         //  1) One binary runs another (e.g., -c time -o "my_binary"), and
         //     called binary calls readlink().
@@ -403,14 +398,14 @@ readlinkFunc(SyscallDesc *desc, int num, LiveProcess *p, ThreadContext *tc,
 }
 
 SyscallReturn
-unlinkFunc(SyscallDesc *desc, int num, LiveProcess *p, ThreadContext *tc)
+unlinkFunc(SyscallDesc *desc, int num, Process *p, ThreadContext *tc)
 {
     return unlinkHelper(desc, num, p, tc, 0);
 }
 
 SyscallReturn
-unlinkHelper(SyscallDesc *desc, int num, LiveProcess *p, ThreadContext *tc,
-           int index)
+unlinkHelper(SyscallDesc *desc, int num, Process *p, ThreadContext *tc,
+             int index)
 {
     string path;
 
@@ -426,7 +421,7 @@ unlinkHelper(SyscallDesc *desc, int num, LiveProcess *p, ThreadContext *tc,
 
 
 SyscallReturn
-mkdirFunc(SyscallDesc *desc, int num, LiveProcess *p, ThreadContext *tc)
+mkdirFunc(SyscallDesc *desc, int num, Process *p, ThreadContext *tc)
 {
     string path;
 
@@ -444,7 +439,7 @@ mkdirFunc(SyscallDesc *desc, int num, LiveProcess *p, ThreadContext *tc)
 }
 
 SyscallReturn
-renameFunc(SyscallDesc *desc, int num, LiveProcess *p, ThreadContext *tc)
+renameFunc(SyscallDesc *desc, int num, Process *p, ThreadContext *tc)
 {
     string old_name;
 
@@ -466,7 +461,7 @@ renameFunc(SyscallDesc *desc, int num, LiveProcess *p, ThreadContext *tc)
 }
 
 SyscallReturn
-truncateFunc(SyscallDesc *desc, int num, LiveProcess *p, ThreadContext *tc)
+truncateFunc(SyscallDesc *desc, int num, Process *p, ThreadContext *tc)
 {
     string path;
 
@@ -484,16 +479,16 @@ truncateFunc(SyscallDesc *desc, int num, LiveProcess *p, ThreadContext *tc)
 }
 
 SyscallReturn
-ftruncateFunc(SyscallDesc *desc, int num,
-              LiveProcess *process, ThreadContext *tc)
+ftruncateFunc(SyscallDesc *desc, int num, Process *p, ThreadContext *tc)
 {
     int index = 0;
-    int tgt_fd = process->getSyscallArg(tc, index);
-    off_t length = process->getSyscallArg(tc, index);
+    int tgt_fd = p->getSyscallArg(tc, index);
+    off_t length = p->getSyscallArg(tc, index);
 
-    int sim_fd = process->getSimFD(tgt_fd);
-    if (sim_fd < 0)
+    auto ffdp = std::dynamic_pointer_cast<FileFDEntry>((*p->fds)[tgt_fd]);
+    if (!ffdp)
         return -EBADF;
+    int sim_fd = ffdp->getSimFD();
 
     int result = ftruncate(sim_fd, length);
     return (result == -1) ? -errno : result;
@@ -501,7 +496,7 @@ ftruncateFunc(SyscallDesc *desc, int num,
 
 SyscallReturn
 truncate64Func(SyscallDesc *desc, int num,
-                LiveProcess *process, ThreadContext *tc)
+               Process *process, ThreadContext *tc)
 {
     int index = 0;
     string path;
@@ -523,16 +518,16 @@ truncate64Func(SyscallDesc *desc, int num,
 }
 
 SyscallReturn
-ftruncate64Func(SyscallDesc *desc, int num,
-                LiveProcess *process, ThreadContext *tc)
+ftruncate64Func(SyscallDesc *desc, int num, Process *p, ThreadContext *tc)
 {
     int index = 0;
-    int tgt_fd = process->getSyscallArg(tc, index);
-    int64_t length = process->getSyscallArg(tc, index, 64);
+    int tgt_fd = p->getSyscallArg(tc, index);
+    int64_t length = p->getSyscallArg(tc, index, 64);
 
-    int sim_fd = process->getSimFD(tgt_fd);
-    if (sim_fd < 0)
+    auto ffdp = std::dynamic_pointer_cast<FileFDEntry>((*p->fds)[tgt_fd]);
+    if (!ffdp)
         return -EBADF;
+    int sim_fd = ffdp->getSimFD();
 
 #if NO_STAT64
     int result = ftruncate(sim_fd, length);
@@ -543,7 +538,7 @@ ftruncate64Func(SyscallDesc *desc, int num,
 }
 
 SyscallReturn
-umaskFunc(SyscallDesc *desc, int num, LiveProcess *process, ThreadContext *tc)
+umaskFunc(SyscallDesc *desc, int num, Process *process, ThreadContext *tc)
 {
     // Letting the simulated program change the simulator's umask seems like
     // a bad idea.  Compromise by just returning the current umask but not
@@ -554,7 +549,7 @@ umaskFunc(SyscallDesc *desc, int num, LiveProcess *process, ThreadContext *tc)
 }
 
 SyscallReturn
-chownFunc(SyscallDesc *desc, int num, LiveProcess *p, ThreadContext *tc)
+chownFunc(SyscallDesc *desc, int num, Process *p, ThreadContext *tc)
 {
     string path;
 
@@ -576,19 +571,20 @@ chownFunc(SyscallDesc *desc, int num, LiveProcess *p, ThreadContext *tc)
 }
 
 SyscallReturn
-fchownFunc(SyscallDesc *desc, int num, LiveProcess *process, ThreadContext *tc)
+fchownFunc(SyscallDesc *desc, int num, Process *p, ThreadContext *tc)
 {
     int index = 0;
-    int tgt_fd = process->getSyscallArg(tc, index);
+    int tgt_fd = p->getSyscallArg(tc, index);
 
-    int sim_fd = process->getSimFD(tgt_fd);
-    if (sim_fd < 0)
+    auto ffdp = std::dynamic_pointer_cast<FileFDEntry>((*p->fds)[tgt_fd]);
+    if (!ffdp)
         return -EBADF;
+    int sim_fd = ffdp->getSimFD();
 
     /* XXX endianess */
-    uint32_t owner = process->getSyscallArg(tc, index);
+    uint32_t owner = p->getSyscallArg(tc, index);
     uid_t hostOwner = owner;
-    uint32_t group = process->getSyscallArg(tc, index);
+    uint32_t group = p->getSyscallArg(tc, index);
     gid_t hostGroup = group;
 
     int result = fchown(sim_fd, hostOwner, hostGroup);
@@ -596,80 +592,90 @@ fchownFunc(SyscallDesc *desc, int num, LiveProcess *process, ThreadContext *tc)
 }
 
 
+/**
+ * TODO: there's a bit more involved here since file descriptors created with
+ * dup are supposed to share a file description. So, there is a problem with
+ * maintaining fields like file offset or flags since an update to such a
+ * field won't be reflected in the metadata for the fd entries that we
+ * maintain to hold metadata for checkpoint restoration.
+ */
 SyscallReturn
-dupFunc(SyscallDesc *desc, int num, LiveProcess *process, ThreadContext *tc)
+dupFunc(SyscallDesc *desc, int num, Process *p, ThreadContext *tc)
 {
     int index = 0;
-    int tgt_fd = process->getSyscallArg(tc, index);
+    int tgt_fd = p->getSyscallArg(tc, index);
 
-    int sim_fd = process->getSimFD(tgt_fd);
-    if (sim_fd < 0)
+    auto old_hbfdp = std::dynamic_pointer_cast<HBFDEntry>((*p->fds)[tgt_fd]);
+    if (!old_hbfdp)
         return -EBADF;
-
-    FDEntry *fde = process->getFDEntry(tgt_fd);
+    int sim_fd = old_hbfdp->getSimFD();
 
     int result = dup(sim_fd);
-    return (result == -1) ? -errno :
-        process->allocFD(result, fde->filename, fde->flags, fde->mode, false);
+    int local_errno = errno;
+
+    std::shared_ptr<FDEntry> new_fdep = old_hbfdp->clone();
+    auto new_hbfdp = std::dynamic_pointer_cast<HBFDEntry>(new_fdep);
+    new_hbfdp->setSimFD(result);
+
+    return (result == -1) ? -local_errno : p->fds->allocFD(new_fdep);
 }
 
-
 SyscallReturn
-fcntlFunc(SyscallDesc *desc, int num, LiveProcess *process,
-          ThreadContext *tc)
+fcntlFunc(SyscallDesc *desc, int num, Process *p, ThreadContext *tc)
 {
+    int arg;
     int index = 0;
-    int tgt_fd = process->getSyscallArg(tc, index);
+    int tgt_fd = p->getSyscallArg(tc, index);
+    int cmd = p->getSyscallArg(tc, index);
 
-    int sim_fd = process->getSimFD(tgt_fd);
-    if (sim_fd < 0)
+    auto hbfdp = std::dynamic_pointer_cast<HBFDEntry>((*p->fds)[tgt_fd]);
+    if (!hbfdp)
         return -EBADF;
+    int sim_fd = hbfdp->getSimFD();
 
-    int cmd = process->getSyscallArg(tc, index);
+    int coe = hbfdp->getCOE();
+
     switch (cmd) {
-      case 0: // F_DUPFD
-        // if we really wanted to support this, we'd need to do it
-        // in the target fd space.
-        warn("fcntl(%d, F_DUPFD) not supported, error returned\n", tgt_fd);
-        return -EMFILE;
+      case F_GETFD:
+        return coe & FD_CLOEXEC;
 
-      case 1: // F_GETFD (get close-on-exec flag)
-      case 2: // F_SETFD (set close-on-exec flag)
+      case F_SETFD: {
+        arg = p->getSyscallArg(tc, index);
+        arg ? hbfdp->setCOE(true) : hbfdp->setCOE(false);
         return 0;
+      }
 
-      case 3: // F_GETFL (get file flags)
-      case 4: // F_SETFL (set file flags)
-        // not sure if this is totally valid, but we'll pass it through
-        // to the underlying OS
-        warn("fcntl(%d, %d) passed through to host\n", tgt_fd, cmd);
-        return fcntl(sim_fd, cmd);
-        // return 0;
-
-      case 7: // F_GETLK  (get lock)
-      case 8: // F_SETLK  (set lock)
-      case 9: // F_SETLKW (set lock and wait)
-        // don't mess with file locking... just act like it's OK
-        warn("File lock call (fcntl(%d, %d)) ignored.\n", tgt_fd, cmd);
-        return 0;
+      // Rely on the host to maintain the file status flags for this file
+      // description rather than maintain it ourselves. Admittedly, this
+      // is suboptimal (and possibly error prone), but it is difficult to
+      // maintain the flags by tracking them across the different descriptors
+      // (that refer to this file description) caused by clone, dup, and
+      // subsequent fcntls.
+      case F_GETFL:
+      case F_SETFL: {
+        arg = p->getSyscallArg(tc, index);
+        int rv = fcntl(sim_fd, cmd, arg);
+        return (rv == -1) ? -errno : rv;
+      }
 
       default:
-        warn("Unknown fcntl command %d\n", cmd);
+        warn("fcntl: unsupported command %d\n", cmd);
         return 0;
     }
 }
 
 SyscallReturn
-fcntl64Func(SyscallDesc *desc, int num, LiveProcess *process,
-            ThreadContext *tc)
+fcntl64Func(SyscallDesc *desc, int num, Process *p, ThreadContext *tc)
 {
     int index = 0;
-    int tgt_fd = process->getSyscallArg(tc, index);
+    int tgt_fd = p->getSyscallArg(tc, index);
 
-    int sim_fd = process->getSimFD(tgt_fd);
-    if (sim_fd < 0)
+    auto hbfdp = std::dynamic_pointer_cast<HBFDEntry>((*p->fds)[tgt_fd]);
+    if (!hbfdp)
         return -EBADF;
+    int sim_fd = hbfdp->getSimFD();
 
-    int cmd = process->getSyscallArg(tc, index);
+    int cmd = p->getSyscallArg(tc, index);
     switch (cmd) {
       case 33: //F_GETLK64
         warn("fcntl64(%d, F_GETLK64) not supported, error returned\n", tgt_fd);
@@ -691,31 +697,42 @@ fcntl64Func(SyscallDesc *desc, int num, LiveProcess *process,
 }
 
 SyscallReturn
-pipePseudoFunc(SyscallDesc *desc, int callnum, LiveProcess *process,
-         ThreadContext *tc)
+pipePseudoFunc(SyscallDesc *desc, int callnum, Process *process,
+               ThreadContext *tc)
 {
-    int fds[2], sim_fds[2];
-    int pipe_retval = pipe(fds);
+    int sim_fds[2], tgt_fds[2];
 
-    if (pipe_retval < 0) {
-        // error
+    int pipe_retval = pipe(sim_fds);
+    if (pipe_retval < 0)
         return pipe_retval;
-    }
 
-    sim_fds[0] = process->allocFD(fds[0], "PIPE-READ", O_WRONLY, -1, true);
-    sim_fds[1] = process->allocFD(fds[1], "PIPE-WRITE", O_RDONLY, -1, true);
+    auto rend = PipeFDEntry::EndType::read;
+    auto rpfd = std::make_shared<PipeFDEntry>(sim_fds[0], O_WRONLY, rend);
 
-    process->setReadPipeSource(sim_fds[0], sim_fds[1]);
-    // Alpha Linux convention for pipe() is that fd[0] is returned as
-    // the return value of the function, and fd[1] is returned in r20.
-    tc->setIntReg(SyscallPseudoReturnReg, sim_fds[1]);
+    auto wend = PipeFDEntry::EndType::write;
+    auto wpfd = std::make_shared<PipeFDEntry>(sim_fds[1], O_RDONLY, wend);
+
+    tgt_fds[0] = process->fds->allocFD(rpfd);
+    tgt_fds[1] = process->fds->allocFD(wpfd);
+
+    /**
+     * Now patch the read object to record the target file descriptor chosen
+     * as the write end of the pipe.
+     */
+    rpfd->setPipeReadSource(tgt_fds[1]);
+
+    /**
+     * Alpha Linux convention for pipe() is that fd[0] is returned as
+     * the return value of the function, and fd[1] is returned in r20.
+     */
+    tc->setIntReg(SyscallPseudoReturnReg, tgt_fds[1]);
     return sim_fds[0];
 }
 
 
 SyscallReturn
-getpidPseudoFunc(SyscallDesc *desc, int callnum, LiveProcess *process,
-           ThreadContext *tc)
+getpidPseudoFunc(SyscallDesc *desc, int callnum, Process *process,
+                 ThreadContext *tc)
 {
     // Make up a PID.  There's no interprocess communication in
     // fake_syscall mode, so there's no way for a process to know it's
@@ -727,8 +744,8 @@ getpidPseudoFunc(SyscallDesc *desc, int callnum, LiveProcess *process,
 
 
 SyscallReturn
-getuidPseudoFunc(SyscallDesc *desc, int callnum, LiveProcess *process,
-           ThreadContext *tc)
+getuidPseudoFunc(SyscallDesc *desc, int callnum, Process *process,
+                 ThreadContext *tc)
 {
     // Make up a UID and EUID... it shouldn't matter, and we want the
     // simulation to be deterministic.
@@ -740,8 +757,8 @@ getuidPseudoFunc(SyscallDesc *desc, int callnum, LiveProcess *process,
 
 
 SyscallReturn
-getgidPseudoFunc(SyscallDesc *desc, int callnum, LiveProcess *process,
-           ThreadContext *tc)
+getgidPseudoFunc(SyscallDesc *desc, int callnum, Process *process,
+                 ThreadContext *tc)
 {
     // Get current group ID.  EGID goes in r20.
     tc->setIntReg(SyscallPseudoReturnReg, process->egid()); //EGID
@@ -750,7 +767,7 @@ getgidPseudoFunc(SyscallDesc *desc, int callnum, LiveProcess *process,
 
 
 SyscallReturn
-setuidFunc(SyscallDesc *desc, int callnum, LiveProcess *process,
+setuidFunc(SyscallDesc *desc, int callnum, Process *process,
            ThreadContext *tc)
 {
     // can't fathom why a benchmark would call this.
@@ -760,7 +777,7 @@ setuidFunc(SyscallDesc *desc, int callnum, LiveProcess *process,
 }
 
 SyscallReturn
-getpidFunc(SyscallDesc *desc, int callnum, LiveProcess *process,
+getpidFunc(SyscallDesc *desc, int callnum, Process *process,
            ThreadContext *tc)
 {
     // Make up a PID.  There's no interprocess communication in
@@ -772,44 +789,44 @@ getpidFunc(SyscallDesc *desc, int callnum, LiveProcess *process,
 }
 
 SyscallReturn
-getppidFunc(SyscallDesc *desc, int callnum, LiveProcess *process,
-           ThreadContext *tc)
+getppidFunc(SyscallDesc *desc, int callnum, Process *process,
+            ThreadContext *tc)
 {
     return process->ppid();
 }
 
 SyscallReturn
-getuidFunc(SyscallDesc *desc, int callnum, LiveProcess *process,
+getuidFunc(SyscallDesc *desc, int callnum, Process *process,
            ThreadContext *tc)
 {
     return process->uid();              // UID
 }
 
 SyscallReturn
-geteuidFunc(SyscallDesc *desc, int callnum, LiveProcess *process,
-           ThreadContext *tc)
+geteuidFunc(SyscallDesc *desc, int callnum, Process *process,
+            ThreadContext *tc)
 {
     return process->euid();             // UID
 }
 
 SyscallReturn
-getgidFunc(SyscallDesc *desc, int callnum, LiveProcess *process,
+getgidFunc(SyscallDesc *desc, int callnum, Process *process,
            ThreadContext *tc)
 {
     return process->gid();
 }
 
 SyscallReturn
-getegidFunc(SyscallDesc *desc, int callnum, LiveProcess *process,
-           ThreadContext *tc)
+getegidFunc(SyscallDesc *desc, int callnum, Process *process,
+            ThreadContext *tc)
 {
     return process->egid();
 }
 
 
 SyscallReturn
-cloneFunc(SyscallDesc *desc, int callnum, LiveProcess *process,
-           ThreadContext *tc)
+cloneFunc(SyscallDesc *desc, int callnum, Process *process,
+          ThreadContext *tc)
 {
     int index = 0;
     IntReg flags = process->getSyscallArg(tc, index);
@@ -828,7 +845,7 @@ cloneFunc(SyscallDesc *desc, int callnum, LiveProcess *process,
     }
 
     ThreadContext* ctc; // child thread context
-    if ( ( ctc = process->findFreeContext() ) != NULL ) {
+    if ((ctc = process->findFreeContext())) {
         DPRINTF(SyscallVerbose, " Found unallocated thread context\n");
 
         ctc->clearArchRegs();
@@ -890,21 +907,21 @@ cloneFunc(SyscallDesc *desc, int callnum, LiveProcess *process,
 }
 
 SyscallReturn
-fallocateFunc(SyscallDesc *desc, int callnum, LiveProcess *process,
-              ThreadContext *tc)
+fallocateFunc(SyscallDesc *desc, int callnum, Process *p, ThreadContext *tc)
 {
 #if NO_FALLOCATE
     warn("Host OS cannot support calls to fallocate. Ignoring syscall");
 #else
     int index = 0;
-    int tgt_fd = process->getSyscallArg(tc, index);
-    int mode = process->getSyscallArg(tc, index);
-    off_t offset = process->getSyscallArg(tc, index);
-    off_t len = process->getSyscallArg(tc, index);
+    int tgt_fd = p->getSyscallArg(tc, index);
+    int mode = p->getSyscallArg(tc, index);
+    off_t offset = p->getSyscallArg(tc, index);
+    off_t len = p->getSyscallArg(tc, index);
 
-    int sim_fd = process->getSimFD(tgt_fd);
-    if (sim_fd < 0)
+    auto ffdp = std::dynamic_pointer_cast<FileFDEntry>((*p->fds)[tgt_fd]);
+    if (!ffdp)
         return -EBADF;
+    int sim_fd = ffdp->getSimFD();
 
     int result = fallocate(sim_fd, mode, offset, len);
     if (result < 0)
@@ -914,8 +931,8 @@ fallocateFunc(SyscallDesc *desc, int callnum, LiveProcess *process,
 }
 
 SyscallReturn
-accessFunc(SyscallDesc *desc, int callnum, LiveProcess *p, ThreadContext *tc,
-        int index)
+accessFunc(SyscallDesc *desc, int callnum, Process *p, ThreadContext *tc,
+           int index)
 {
     string path;
     if (!tc->getMemProxy().tryReadString(path, p->getSyscallArg(tc, index)))
@@ -931,7 +948,7 @@ accessFunc(SyscallDesc *desc, int callnum, LiveProcess *p, ThreadContext *tc,
 }
 
 SyscallReturn
-accessFunc(SyscallDesc *desc, int callnum, LiveProcess *p, ThreadContext *tc)
+accessFunc(SyscallDesc *desc, int callnum, Process *p, ThreadContext *tc)
 {
     return accessFunc(desc, callnum, p, tc, 0);
 }
