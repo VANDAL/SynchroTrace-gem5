@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2014 ARM Limited
+ * Copyright (c) 2012-2014,2016 ARM Limited
  * All rights reserved.
  *
  * The license below extends only to copyright in the software and shall
@@ -223,14 +223,9 @@ class BaseTags : public ClockedObject
         return -1;
     }
 
-    virtual unsigned getNumSets() const = 0;
-
-    virtual unsigned getNumWays() const = 0;
-
     virtual void invalidate(CacheBlk *blk) = 0;
 
-    virtual CacheBlk* accessBlock(Addr addr, bool is_secure, Cycles &lat,
-                                  int context_src) = 0;
+    virtual CacheBlk* accessBlock(Addr addr, bool is_secure, Cycles &lat) = 0;
 
     virtual Addr extractTag(Addr addr) const = 0;
 

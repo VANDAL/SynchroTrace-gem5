@@ -152,7 +152,7 @@ def config_mem(options, system):
     them.
     """
 
-    if ( options.mem_type == "HMC_2500_x32"):
+    if ( options.mem_type == "HMC_2500_1x32"):
         HMChost = HMC.config_host_hmc(options, system)
         HMC.config_hmc(options, system, HMChost.hmc_host)
         subsystem = system.hmc_dev
@@ -163,7 +163,7 @@ def config_mem(options, system):
 
     if options.tlm_memory:
         system.external_memory = m5.objects.ExternalSlave(
-            port_type="tlm",
+            port_type="tlm_slave",
             port_data=options.tlm_memory,
             port=system.membus.master,
             addr_ranges=system.mem_ranges)
@@ -223,7 +223,7 @@ def config_mem(options, system):
 
     # Connect the controllers to the membus
     for i in xrange(len(subsystem.mem_ctrls)):
-        if (options.mem_type == "HMC_2500_x32"):
+        if (options.mem_type == "HMC_2500_1x32"):
             subsystem.mem_ctrls[i].port = xbar[i/4].master
         else:
             subsystem.mem_ctrls[i].port = xbar.master

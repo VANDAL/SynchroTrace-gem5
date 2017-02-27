@@ -38,6 +38,7 @@
 #include "cpu/thread_context.hh"
 #include "debug/Loader.hh"
 #include "mem/page_table.hh"
+#include "sim/aux_vector.hh"
 #include "sim/byteswap.hh"
 #include "sim/process_impl.hh"
 #include "sim/syscall_return.hh"
@@ -46,9 +47,8 @@
 using namespace AlphaISA;
 using namespace std;
 
-AlphaLiveProcess::AlphaLiveProcess(LiveProcessParams *params,
-                                   ObjectFile *objFile)
-    : LiveProcess(params, objFile)
+AlphaProcess::AlphaProcess(ProcessParams *params, ObjectFile *objFile)
+    : Process(params, objFile)
 {
     brk_point = objFile->dataBase() + objFile->dataSize() + objFile->bssSize();
     brk_point = roundUp(brk_point, PageBytes);
@@ -67,7 +67,7 @@ AlphaLiveProcess::AlphaLiveProcess(LiveProcessParams *params,
 }
 
 void
-AlphaLiveProcess::argsInit(int intSize, int pageSize)
+AlphaProcess::argsInit(int intSize, int pageSize)
 {
     // Patch the ld_bias for dynamic executables.
     updateBias();
@@ -176,7 +176,7 @@ AlphaLiveProcess::argsInit(int intSize, int pageSize)
 }
 
 void
-AlphaLiveProcess::setupASNReg()
+AlphaProcess::setupASNReg()
 {
     ThreadContext *tc = system->getThreadContext(contextIds[0]);
     tc->setMiscRegNoEffect(IPR_DTB_ASN, _pid << 57);
@@ -184,9 +184,9 @@ AlphaLiveProcess::setupASNReg()
 
 
 void
-AlphaLiveProcess::loadState(CheckpointIn &cp)
+AlphaProcess::loadState(CheckpointIn &cp)
 {
-    LiveProcess::loadState(cp);
+    Process::loadState(cp);
     // need to set up ASN after unserialization since _pid value may
     // come from checkpoint
     setupASNReg();
@@ -194,13 +194,13 @@ AlphaLiveProcess::loadState(CheckpointIn &cp)
 
 
 void
-AlphaLiveProcess::initState()
+AlphaProcess::initState()
 {
     // need to set up ASN before further initialization since init
     // will involve writing to virtual memory addresses
     setupASNReg();
 
-    LiveProcess::initState();
+    Process::initState();
 
     argsInit(MachineBytes, PageBytes);
 
@@ -214,22 +214,21 @@ AlphaLiveProcess::initState()
 }
 
 AlphaISA::IntReg
-AlphaLiveProcess::getSyscallArg(ThreadContext *tc, int &i)
+AlphaProcess::getSyscallArg(ThreadContext *tc, int &i)
 {
     assert(i < 6);
     return tc->readIntReg(FirstArgumentReg + i++);
 }
 
 void
-AlphaLiveProcess::setSyscallArg(ThreadContext *tc,
-        int i, AlphaISA::IntReg val)
+AlphaProcess::setSyscallArg(ThreadContext *tc, int i, AlphaISA::IntReg val)
 {
     assert(i < 6);
     tc->setIntReg(FirstArgumentReg + i, val);
 }
 
 void
-AlphaLiveProcess::setSyscallReturn(ThreadContext *tc, SyscallReturn sysret)
+AlphaProcess::setSyscallReturn(ThreadContext *tc, SyscallReturn sysret)
 {
     // check for error condition.  Alpha syscall convention is to
     // indicate success/failure in reg a3 (r19) and put the

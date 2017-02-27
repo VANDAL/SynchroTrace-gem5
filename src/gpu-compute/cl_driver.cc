@@ -35,6 +35,8 @@
 
 #include "gpu-compute/cl_driver.hh"
 
+#include <memory>
+
 #include "base/intmath.hh"
 #include "cpu/thread_context.hh"
 #include "gpu-compute/dispatcher.hh"
@@ -91,17 +93,16 @@ ClDriver::handshake(GpuDispatcher *_dispatcher)
 }
 
 int
-ClDriver::open(LiveProcess *p, ThreadContext *tc, int mode, int flags)
+ClDriver::open(Process *p, ThreadContext *tc, int mode, int flags)
 {
-    int fd = p->allocFD(-1, filename, 0, 0, false);
-    FDEntry *fde = p->getFDEntry(fd);
-    fde->driver = this;
-
-    return fd;
+    std::shared_ptr<DeviceFDEntry> fdp;
+    fdp = std::make_shared<DeviceFDEntry>(this, filename);
+    int tgt_fd = p->fds->allocFD(fdp);
+    return tgt_fd;
 }
 
 int
-ClDriver::ioctl(LiveProcess *process, ThreadContext *tc, unsigned req)
+ClDriver::ioctl(Process *process, ThreadContext *tc, unsigned req)
 {
     int index = 2;
     Addr buf_addr = process->getSyscallArg(tc, index);

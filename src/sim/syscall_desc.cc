@@ -33,26 +33,32 @@
 
 #include "sim/syscall_desc.hh"
 
+#include <memory>
+
 #include "base/trace.hh"
+#include "base/types.hh"
 #include "config/the_isa.hh"
 #include "cpu/base.hh"
 #include "cpu/thread_context.hh"
+#include "sim/faults.hh"
 #include "sim/process.hh"
 #include "sim/syscall_debug_macros.hh"
 #include "sim/syscall_return.hh"
 
 void
-SyscallDesc::doSyscall(int callnum, LiveProcess *process, ThreadContext *tc)
+SyscallDesc::doSyscall(int callnum, Process *process, ThreadContext *tc,
+                       Fault *fault)
 {
     TheISA::IntReg arg[6] M5_VAR_USED;
 
     /**
      * Step through the first six parameters for the system call and
      * retrieve their values. Note that index is incremented as a
-     * side-effect of the calling method.
+     * side-effect of the getSyscallArg method which is why the LHS
+     * needs the "-1".
      */
     for (int index = 0; index < 6; )
-        arg[index] = process->getSyscallArg(tc, index);
+        arg[index - 1] = process->getSyscallArg(tc, index);
 
     /**
      * Linux supports up to six system call arguments through registers
@@ -70,9 +76,10 @@ SyscallDesc::doSyscall(int callnum, LiveProcess *process, ThreadContext *tc)
      * blocking behavior, warn that the system call will retry;
      * alternatively, print the return value.
      */
-    if (retval.needsRetry())
+    if (retval.needsRetry()) {
+        *fault = std::make_shared<SyscallRetryFault>();
         DPRINTF_SYSCALL(Base, "%s needs retry\n", _name);
-    else
+    } else
         DPRINTF_SYSCALL(Base, "%s returns %d\n", _name, retval.encodedValue());
 
     if (!(_flags & SyscallDesc::SuppressReturnValue) && !retval.needsRetry())

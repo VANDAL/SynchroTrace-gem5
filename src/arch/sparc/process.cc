@@ -42,6 +42,7 @@
 #include "cpu/thread_context.hh"
 #include "debug/Stack.hh"
 #include "mem/page_table.hh"
+#include "sim/aux_vector.hh"
 #include "sim/process_impl.hh"
 #include "sim/syscall_return.hh"
 #include "sim/system.hh"
@@ -52,9 +53,9 @@ using namespace SparcISA;
 static const int FirstArgumentReg = 8;
 
 
-SparcLiveProcess::SparcLiveProcess(LiveProcessParams * params,
-        ObjectFile *objFile, Addr _StackBias)
-    : LiveProcess(params, objFile), StackBias(_StackBias)
+SparcProcess::SparcProcess(ProcessParams * params, ObjectFile *objFile,
+                           Addr _StackBias)
+    : Process(params, objFile), StackBias(_StackBias)
 {
 
     // XXX all the below need to be updated for SPARC - Ali
@@ -70,7 +71,7 @@ SparcLiveProcess::SparcLiveProcess(LiveProcessParams * params,
 }
 
 void
-SparcLiveProcess::handleTrap(int trapNum, ThreadContext *tc)
+SparcProcess::handleTrap(int trapNum, ThreadContext *tc, Fault *fault)
 {
     PCState pc = tc->pcState();
     switch (trapNum) {
@@ -111,9 +112,9 @@ SparcLiveProcess::handleTrap(int trapNum, ThreadContext *tc)
 }
 
 void
-SparcLiveProcess::initState()
+SparcProcess::initState()
 {
-    LiveProcess::initState();
+    Process::initState();
 
     ThreadContext *tc = system->getThreadContext(contextIds[0]);
     // From the SPARC ABI
@@ -149,6 +150,9 @@ SparcLiveProcess::initState()
     // Set the ASI register to something fixed
     tc->setMiscReg(MISCREG_ASI, ASI_PRIMARY);
 
+    // Set the MMU Primary Context Register to hold the process' pid
+    tc->setMiscReg(MISCREG_MMU_P_CONTEXT, _pid);
+
     /*
      * T1 specific registers
      */
@@ -157,9 +161,9 @@ SparcLiveProcess::initState()
 }
 
 void
-Sparc32LiveProcess::initState()
+Sparc32Process::initState()
 {
-    SparcLiveProcess::initState();
+    SparcProcess::initState();
 
     ThreadContext *tc = system->getThreadContext(contextIds[0]);
     // The process runs in user mode with 32 bit addresses
@@ -172,9 +176,9 @@ Sparc32LiveProcess::initState()
 }
 
 void
-Sparc64LiveProcess::initState()
+Sparc64Process::initState()
 {
-    SparcLiveProcess::initState();
+    SparcProcess::initState();
 
     ThreadContext *tc = system->getThreadContext(contextIds[0]);
     // The process runs in user mode
@@ -187,7 +191,7 @@ Sparc64LiveProcess::initState()
 
 template<class IntType>
 void
-SparcLiveProcess::argsInit(int pageSize)
+SparcProcess::argsInit(int pageSize)
 {
     int intSize = sizeof(IntType);
 
@@ -411,14 +415,12 @@ SparcLiveProcess::argsInit(int pageSize)
 
     // Align the "stack_min" to a page boundary.
     stack_min = roundDown(stack_min, pageSize);
-
-//    num_processes++;
 }
 
 void
-Sparc64LiveProcess::argsInit(int intSize, int pageSize)
+Sparc64Process::argsInit(int intSize, int pageSize)
 {
-    SparcLiveProcess::argsInit<uint64_t>(pageSize);
+    SparcProcess::argsInit<uint64_t>(pageSize);
 
     // Stuff the trap handlers into the process address space
     initVirtMem.writeBlob(fillStart,
@@ -428,9 +430,9 @@ Sparc64LiveProcess::argsInit(int intSize, int pageSize)
 }
 
 void
-Sparc32LiveProcess::argsInit(int intSize, int pageSize)
+Sparc32Process::argsInit(int intSize, int pageSize)
 {
-    SparcLiveProcess::argsInit<uint32_t>(pageSize);
+    SparcProcess::argsInit<uint32_t>(pageSize);
 
     // Stuff the trap handlers into the process address space
     initVirtMem.writeBlob(fillStart,
@@ -439,7 +441,7 @@ Sparc32LiveProcess::argsInit(int intSize, int pageSize)
             (uint8_t*)spillHandler32, sizeof(MachInst) *  numSpillInsts);
 }
 
-void Sparc32LiveProcess::flushWindows(ThreadContext *tc)
+void Sparc32Process::flushWindows(ThreadContext *tc)
 {
     IntReg Cansave = tc->readIntReg(NumIntArchRegs + 3);
     IntReg Canrestore = tc->readIntReg(NumIntArchRegs + 4);
@@ -474,7 +476,7 @@ void Sparc32LiveProcess::flushWindows(ThreadContext *tc)
 }
 
 void
-Sparc64LiveProcess::flushWindows(ThreadContext *tc)
+Sparc64Process::flushWindows(ThreadContext *tc)
 {
     IntReg Cansave = tc->readIntReg(NumIntArchRegs + 3);
     IntReg Canrestore = tc->readIntReg(NumIntArchRegs + 4);
@@ -509,35 +511,35 @@ Sparc64LiveProcess::flushWindows(ThreadContext *tc)
 }
 
 IntReg
-Sparc32LiveProcess::getSyscallArg(ThreadContext *tc, int &i)
+Sparc32Process::getSyscallArg(ThreadContext *tc, int &i)
 {
     assert(i < 6);
     return bits(tc->readIntReg(FirstArgumentReg + i++), 31, 0);
 }
 
 void
-Sparc32LiveProcess::setSyscallArg(ThreadContext *tc, int i, IntReg val)
+Sparc32Process::setSyscallArg(ThreadContext *tc, int i, IntReg val)
 {
     assert(i < 6);
     tc->setIntReg(FirstArgumentReg + i, bits(val, 31, 0));
 }
 
 IntReg
-Sparc64LiveProcess::getSyscallArg(ThreadContext *tc, int &i)
+Sparc64Process::getSyscallArg(ThreadContext *tc, int &i)
 {
     assert(i < 6);
     return tc->readIntReg(FirstArgumentReg + i++);
 }
 
 void
-Sparc64LiveProcess::setSyscallArg(ThreadContext *tc, int i, IntReg val)
+Sparc64Process::setSyscallArg(ThreadContext *tc, int i, IntReg val)
 {
     assert(i < 6);
     tc->setIntReg(FirstArgumentReg + i, val);
 }
 
 void
-SparcLiveProcess::setSyscallReturn(ThreadContext *tc, SyscallReturn sysret)
+SparcProcess::setSyscallReturn(ThreadContext *tc, SyscallReturn sysret)
 {
     // check for error condition.  SPARC syscall convention is to
     // indicate success/failure in reg the carry bit of the ccr

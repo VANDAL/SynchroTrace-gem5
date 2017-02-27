@@ -75,7 +75,7 @@ if m5.defines.buildEnv['TARGET_ISA'] == "x86":
     system.cpu.interrupts[0].int_slave = system.membus.master
 
 # Create a DDR3 memory controller and connect it to the membus
-system.mem_ctrl = DDR3_1600_x64()
+system.mem_ctrl = DDR3_1600_8x8()
 system.mem_ctrl.range = system.mem_ranges[0]
 system.mem_ctrl.port = system.membus.master
 
@@ -89,7 +89,7 @@ isa = str(m5.defines.buildEnv['TARGET_ISA']).lower()
 binary = 'tests/test-progs/hello/bin/' + isa + '/linux/hello'
 
 # Create a process for a simple "Hello World" application
-process = LiveProcess()
+process = Process()
 # Set the command
 # cmd is a list which begins with the executable (like argv)
 process.cmd = [binary]

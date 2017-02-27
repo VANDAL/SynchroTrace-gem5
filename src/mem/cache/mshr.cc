@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2013, 2015-2016 ARM Limited
+ * Copyright (c) 2012-2013, 2015-2017 ARM Limited
  * All rights reserved.
  *
  * The license below extends only to copyright in the software and shall
@@ -351,8 +351,7 @@ MSHR::handleSnoop(PacketPtr pkt, Counter _order)
     // snoop writes as they are currently not marked as invalidations
     panic_if(pkt->needsWritable() != pkt->isInvalidate(),
              "%s got snoop %s where needsWritable, "
-             "does not match isInvalidate", name(), pkt->print(),
-             pkt->getAddr());
+             "does not match isInvalidate", name(), pkt->print());
 
     if (!inService || (pkt->isExpressSnoop() && downstreamPending)) {
         // Request has not been issued yet, or it's been issued
@@ -415,7 +414,7 @@ MSHR::handleSnoop(PacketPtr pkt, Counter _order)
         // the packet and the request as part of handling the deferred
         // snoop.
         PacketPtr cp_pkt = will_respond ? new Packet(pkt, true, true) :
-            new Packet(new Request(*pkt->req), pkt->cmd);
+            new Packet(new Request(*pkt->req), pkt->cmd, blkSize);
 
         if (will_respond) {
             // we are the ordering point, and will consequently
@@ -466,7 +465,8 @@ MSHR::extractServiceableTargets(PacketPtr pkt)
     // avoid memory consistency violations.
     if (pkt->cmd == MemCmd::ReadRespWithInvalidate) {
         auto it = targets.begin();
-        assert(it->source == Target::FromCPU);
+        assert((it->source == Target::FromCPU) ||
+               (it->source == Target::FromPrefetcher));
         ready_targets.push_back(*it);
         it = targets.erase(it);
         while (it != targets.end()) {
