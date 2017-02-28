@@ -1,4 +1,9 @@
-#[SYNCHROTRACE](http://vlsi.ece.drexel.edu/index.php?title=SynchroTrace)
+#SYNCHROTRACE
+
+##What is it?
+
+A fast computer-architecture simulation framework for design space exploration.  
+[See here for details](http://vlsi.ece.drexel.edu/index.php?title=SynchroTrace)
 
 Two tools form the SynchroTrace Simulation Framework:
 
@@ -18,7 +23,7 @@ Two tools form the SynchroTrace Simulation Framework:
    ```sh
    $ git clone https://github.com/VANDAL/SynchroTrace-gem5
    $ cd SynchroTrace-gem5
-   $ scons build/X86_MESI_Two_Level/gem.opt -j
+   $ scons build/X86_MESI_Two_Level/gem5.opt -j
    [hit enter to install git commit hook]
    ```
 4. Run SynchroTrace
