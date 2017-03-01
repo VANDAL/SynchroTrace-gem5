@@ -154,7 +154,7 @@ STParser::initSigilFilePointers()
         syncRegionFilePointers.resize(numThreads);
 
         // Thread 0 will have one extra region to set create threads
-        syncRegionFilePointers[0].resize(instSyncRegion - startSyncRegion + 1);
+        syncRegionFilePointers[0].resize(instSyncRegion - startSyncRegion + 2);
 
         // Master Thread creation region
         std::string fname_str = csprintf("%sthr_create_region.gz",
