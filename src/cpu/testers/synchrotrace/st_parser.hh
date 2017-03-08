@@ -166,7 +166,10 @@ class STParser
     /** Parse synchronization event and add to event map. */
     void processPthreadEvent(std::string this_event, size_t caret_pos);
 
-    // Pthread Meta-data
+    /** Process flag events */
+    void processFlagEvent(ThreadID thread_id, std::string this_event);
+
+   // Pthread Meta-data
 
     /** Map converting each slave thread's pthread address to thread ID */
     std::map<Addr, ThreadID>  addressToIDMap;
@@ -207,6 +210,11 @@ class STParser
 
     /** Main Memory size in terms of number of cache lines */
     uint64_t numCacheLines;
+
+    // Flags
+
+    /** Instruction Counter */
+    std::vector<uint64_t> numInsts;
 
     /** Pthread meta-data file pointer */
     std::ifstream pthreadFilePointer;
@@ -259,6 +267,9 @@ class STParser
      * thread falls under 100 events.
      */
     void replenishEvents(ThreadID thread_id);
+
+    /** Initialize flag event counters */
+    void initFlagEventCounters();
 
     /** Default Parser Constructor */
     STParser(int num_threads, std::deque<STEvent *> **event_map,

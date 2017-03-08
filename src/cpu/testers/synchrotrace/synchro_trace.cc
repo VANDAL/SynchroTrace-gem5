@@ -172,6 +172,9 @@ SynchroTrace::init()
     // Initialize debug flags and mutex lock/barrier maps
     initStats();
 
+    // Initialize flag event counters
+    parser->initFlagEventCounters();
+
     // Map threads to cores
     initialThreadMapping();
 

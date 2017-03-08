@@ -263,11 +263,14 @@ STParser::readEventFile(ThreadID thread_id)
             }
             size_t hash_pos = this_event.find('#');
             size_t caret_pos = this_event.find('^');
+            size_t bang_pos = this_event.find('!');
 
             if (hash_pos != string::npos) {
                 processCommEvent(this_event, hash_pos);
             } else if (caret_pos != string::npos){
                 processPthreadEvent(this_event, caret_pos);
+            } else if (bang_pos != string::npos){
+                processFlagEvent(thread_id, this_event);
             } else {
                 processCompEvent(this_event);
             }
@@ -280,11 +283,14 @@ STParser::readEventFile(ThreadID thread_id)
             } else {
                 size_t hash_pos = this_event.find('#');
                 size_t caret_pos = this_event.find('^');
+                size_t bang_pos = this_event.find('!');
 
                 if (hash_pos != string::npos) {
                     processCommEvent(this_event, hash_pos);
                 } else if (caret_pos != string::npos){
                     processPthreadEvent(this_event, caret_pos);
+                } else if (bang_pos != string::npos){
+                    processFlagEvent(thread_id, this_event);
                 } else {
                     processCompEvent(this_event);
                 }
@@ -698,4 +704,20 @@ STParser::processPthreadEvent(string this_event, size_t caret_pos)
     if (new_event->evThreadID > numThreads || new_event->evThreadID < 0)
         panic("ThreadID bad! Check number of threads in configuration\n");
     eventMap[new_event->evThreadID]->push_back(new_event);
+}
+
+void
+STParser::initFlagEventCounters()
+{
+    numInsts.resize(numThreads);
+    for (int i = 0; i < numThreads; i++) {
+        numInsts[i] = 0;
+    }
+}
+
+void
+STParser::processFlagEvent(ThreadID thread_id, string this_event)
+{
+    numInsts[thread_id] += strtoul(this_event.substr(2, string::npos).c_str(),
+                                                     NULL, 0);
 }
