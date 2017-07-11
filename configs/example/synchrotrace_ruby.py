@@ -91,6 +91,8 @@ parser.add_option("--start-sync-region", type="int", default=0,
                   help="Start simulation of syncronization region")
 parser.add_option("--inst-sync-region", type="int", default=0,
                   help="Select synchronization region to instrument")
+parser.add_option("--barrier-stat-dump", action="store_true", default=False,
+                  help="Dump stats to stats.txt following each barrier")
 parser.add_option("--output-dir", type="string", default="",
                   help="Path to the directory where to dump the output")
 parser.add_option("--master-freq", type="int", default=1,
@@ -135,7 +137,8 @@ tester = SynchroTrace(num_cpus = options.num_cpus,
       mem_size_bytes = toMemorySize(options.mem_size),
       pc_skip = options.pc_skip,
       start_sync_region = options.start_sync_region,
-      inst_sync_region = options.inst_sync_region)
+      inst_sync_region = options.inst_sync_region,
+      barrier_stat_dump = options.barrier_stat_dump)
 
 # Create the system
 system = System(cache_line_size = options.cacheline_size,

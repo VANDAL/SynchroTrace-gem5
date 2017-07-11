@@ -105,7 +105,9 @@ def create_system(options, full_system, system, dma_ports, ruby_system):
                                       enable_prefetch = False)
 
         cpu_seq = RubySequencer(version = i, icache = l1i_cache,
+                                icache_hit_latency = options.l1_latency,
                                 dcache = l1d_cache, clk_domain = clk_domain,
+                                dcache_hit_latency = options.l1_latency,
                                 ruby_system = ruby_system)
 
 

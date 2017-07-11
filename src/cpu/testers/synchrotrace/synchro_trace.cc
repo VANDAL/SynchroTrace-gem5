@@ -68,6 +68,7 @@ SynchroTrace::SynchroTrace(const Params *p)
     numCpus(p->num_cpus), numThreads(p->num_threads),
     startSyncRegion(p->start_sync_region),
     instSyncRegion(p->inst_sync_region),
+    barrStatDump(p->barrier_stat_dump),
     eventDir(p->event_dir), outDir(p->output_dir),
     wakeupFreq(p->master_wakeup_freq),
     useRuby(p->ruby),
@@ -142,6 +143,9 @@ SynchroTrace::init()
     for (int i = 0; i < numContexts; i++)
         cond_wait_states[i] = INIT;
 
+    // Initiate conditional wait signals for each thread
+    condSignals.resize(numThreads);
+
      // Initiate event list per core
     for (int i = 0; i < numContexts; i++)
         coreEvents.push_back(new SynchroTraceCoreEvent(this, i));
@@ -193,7 +197,7 @@ SynchroTrace::initStats()
 
     for (int i = 0; i < numThreads; i++) {
         threadContMap[i] = false;
-        threadMutexMap[i] = 0;
+        //threadMutexMap[i] = 0;
     }
 
     hourCounter = std::time(NULL);
@@ -409,7 +413,8 @@ SynchroTrace::swapThreads(int proc_id)
         // Communication Event
         } else if (((topEvent->eventClass == STEvent::COMM) &&
                 (checkAllCommDependencies(topEvent)) &&
-                (threadMutexMap[curr_thread_id] == 0)) ||
+//                (threadMutexMap[curr_thread_id] == 0)) ||
+                (threadMutexMap[curr_thread_id].empty())) ||
                 pcSkip) {
                 moveThreadToHead(proc_id, i);
                 break;
@@ -438,7 +443,8 @@ SynchroTrace::swapStalledThreads(int proc_id)
     STEvent *this_event = eventMap[event_thread_id]->front();
     if ((this_event->eventType == STEvent::THREAD_JOIN) ||
         ((this_event->eventType == STEvent::MUTEX_LOCK) &&
-        (threadMutexMap[this_event->evThreadID] == 0))) {
+//        (threadMutexMap[this_event->evThreadID] == 0))) {
+        (threadMutexMap[this_event->evThreadID].empty()))) {
         swapThreads(proc_id);
         if (!(coreEvents[proc_id]->scheduled())) {
             schedule(*(coreEvents[proc_id]), curTick());
@@ -705,7 +711,8 @@ SynchroTrace::progressEvents(int proc_id)
             // synchronization, and we do not want to maintain false
             // dependencies.
             if ((checkCommDependency(top_sub_event->thisMsg, event_thread_id)
-                || threadMutexMap[event_thread_id] != 0) || (pcSkip)) {
+//                || threadMutexMap[event_thread_id] != 0) || (pcSkip)) {
+                || !threadMutexMap[event_thread_id].empty()) || (pcSkip)) {
                 triggerMsg(proc_id, event_thread_id, top_sub_event);
             } else {
                 // Check if dependency met next cycle
@@ -729,14 +736,18 @@ SynchroTrace::progressPthreadEvent(STEvent *this_event, int proc_id)
 
     ThreadID slave_thread_id;
     int slave_proc_id;
-    int wait_count;
-    bool all_thread_wait;
+    //int wait_count;
+    //bool all_thread_wait;
     uint64_t mutexLockAddr;
+    std::map<Addr, int>::iterator cond_signal_ittr;
+
     switch (this_event->eventType) {
       case STEvent::MUTEX_LOCK:
         if (mutexLocks.find(this_event->pthAddr) == mutexLocks.end()) {
           mutexLocks.insert(this_event->pthAddr);
-          threadMutexMap[this_event->evThreadID] = this_event->pthAddr;
+//          threadMutexMap[this_event->evThreadID] = this_event->pthAddr;
+          threadMutexMap[this_event->evThreadID].push_back(this_event-> \
+                          pthAddr);
           // Thread is now holding mutex lock.
 
           DPRINTF(STMutexLogger,"Thread %d locked mutex %d\n",
@@ -750,7 +761,8 @@ SynchroTrace::progressPthreadEvent(STEvent *this_event, int proc_id)
         //assert(mutex_ittr != mutexLocks.end());
         if (mutex_ittr != mutexLocks.end())
             mutexLocks.erase(mutex_ittr);
-        threadMutexMap[this_event->evThreadID] = 0;
+        //threadMutexMap[this_event->evThreadID] = 0;
+        threadMutexMap[this_event->evThreadID].pop_back();
         // Thread returned mutex lock.
 
         DPRINTF(STMutexLogger,"Thread %d unlocked mutex %d\n",
@@ -803,7 +815,7 @@ SynchroTrace::progressPthreadEvent(STEvent *this_event, int proc_id)
             }
 
             if (checkBarriers(this_event)) {
-                if (startSyncRegion != 0) {
+                if ((startSyncRegion != 0) || barrStatDump) {
                    // Dump stats every barrier if synchronization region
                    Stats::schedStatEvent(true, true, curTick(), 0);
                 }
@@ -830,7 +842,27 @@ SynchroTrace::progressPthreadEvent(STEvent *this_event, int proc_id)
       break;
 
       case STEvent::COND_WAIT:
-       // Mutex lock is released prior to waiting, acquired after conditional
+        // Unlock mutex lock of condition wait call
+        mutexLockAddr = this_event->mutexLockAddr;
+        mutex_ittr = mutexLocks.find(mutexLockAddr);
+        if (mutex_ittr != mutexLocks.end())
+            mutexLocks.erase(mutex_ittr);
+
+        // If cond var is 0, signal has not been posted => Wait
+        // If cond var is > 0, decrement condSignal and progress the event
+        cond_signal_ittr =
+            condSignals[this_event->evThreadID].find(this_event->pthAddr);
+
+        if (cond_signal_ittr != condSignals[this_event->evThreadID].end()) {
+            if (cond_signal_ittr->second != 0) {
+                // Signal posted by broadcast/signal. Decrement signal.
+                cond_signal_ittr->second--;
+                consumed_event = true;
+            }
+        }
+        break;
+
+/*      // Mutex lock is released prior to waiting, acquired after conditional
        // wait release
        switch (cond_wait_states[this_event->evThreadID]) {
           case INIT: // Push thread onto conditional wait queue
@@ -863,23 +895,67 @@ SynchroTrace::progressPthreadEvent(STEvent *this_event, int proc_id)
             break;
        }
          break;
+*/
 
       case STEvent::COND_SG:
+        // TODO - Currently treated as a broadcast to resolve asynchronous
+        // deadlocking across threads dependent on the condition variable
+
+        // Post condition signal to all threads
+        // for all threads:
+        for (int tid = 0; tid < numThreads; tid++) {
+            cond_signal_ittr =
+                    condSignals[tid].find(this_event->pthAddr);
+
+            if (cond_signal_ittr != condSignals[tid].end()) {
+                // Add an additional signal to the condition variable
+                cond_signal_ittr->second++;
+            } else {
+                // Add the condition variable and set the first signal
+                condSignals[tid].insert({this_event->pthAddr, 1});
+            }
+        }
+        consumed_event = true;
+        break;
+
         // Pop one thread from the conditional wait queue
-        if (!cond_wait_queue.empty()) {
+/*        if (!cond_wait_queue.empty()) {
             cond_wait_states[cond_wait_queue.front()] = SIGNALED;
             cond_wait_queue.pop();
         }
         consumed_event = true;
         break;
-
+*/
       case STEvent::COND_BR:
+        //// Unlock mutex lock of most recent mutex lock call
+        //mutexLockAddr = threadMutexMap[this_event->evThreadID].back();
+        //mutex_ittr = mutexLocks.find(mutexLockAddr);
+        //assert(mutex_ittr != mutexLocks.end());
+        //mutexLocks.erase(mutex_ittr);
 
-        // TODO - Statement that incorporates unlocking mutex on first call
+        // Post condition signal to all threads
+        // for all threads:
+        for (int tid = 0; tid < numThreads; tid++) {
+            cond_signal_ittr =
+                    condSignals[tid].find(this_event->pthAddr);
+
+            if (cond_signal_ittr != condSignals[tid].end()) {
+                // Add an additional signal to the condition variable
+                cond_signal_ittr->second++;
+            } else {
+                // Add the condition variable and set the first signal
+                condSignals[tid].insert({this_event->pthAddr, 1});
+            }
+        }
+        consumed_event = true;
+        break;
+
+/*        // TODO - Statement that incorporates unlocking mutex on first call
         // of broadcast
         //
         // Unlock mutex lock if calling thread holds it
-        mutexLockAddr = threadMutexMap[this_event->evThreadID];
+//        mutexLockAddr = threadMutexMap[this_event->evThreadID];
+        mutexLockAddr = threadMutexMap[this_event->evThreadID].back();
         mutex_ittr = mutexLocks.find(mutexLockAddr);
         //assert(mutex_ittr != mutexLocks.end());
         if (mutex_ittr != mutexLocks.end())
@@ -907,6 +983,7 @@ SynchroTrace::progressPthreadEvent(STEvent *this_event, int proc_id)
             }
         }
         break;
+*/
 
       case STEvent::SPIN_LOCK:
         if (spinLocks.find(this_event->pthAddr) == spinLocks.end()) {

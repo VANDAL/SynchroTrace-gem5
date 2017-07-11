@@ -102,4 +102,5 @@ class SynchroTrace(MemObject):
     pc_skip = Param.Bool("Skip P->C dependencies")
     start_sync_region = Param.Int("Start of synchronization region")
     inst_sync_region = Param.Int("Synchronization region to instrument")
+    barrier_stat_dump = Param.Bool("Option to dump stats after barriers")
     system = Param.System(Parent.any, "System we belong to")

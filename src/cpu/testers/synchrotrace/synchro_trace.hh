@@ -281,6 +281,9 @@ class SynchroTrace : public MemObject
     /** Synchronization region of interest to instrument */
     int instSyncRegion;
 
+    /** Option to dump stats following each barrier */
+    bool barrStatDump;
+
     /** Directory of Sigil Traces and Pthread metadata file */
     std::string eventDir;
 
@@ -357,7 +360,8 @@ class SynchroTrace : public MemObject
     std::vector<bool> threadStartedMap;
 
     /** Holds which threads currently possess a mutex lock */
-    std::vector<bool> threadMutexMap;
+    //std::vector<bool> threadMutexMap;
+    std::vector<std::vector<Addr>> threadMutexMap;
 
     /** Holds if thread can proceed past a barrier */
     std::vector<bool> threadContMap;
@@ -373,6 +377,9 @@ class SynchroTrace : public MemObject
     // 0 - Default state
     // 1 - Queued in wait queue
     // 2 - Signaled
+
+    /** Holds condition variables signaled by broadcasts and signals */
+    std::vector<std::map<Addr, int>> condSignals;
 
     /** Holds spin locks in use */
     std::set<Addr> spinLocks;
