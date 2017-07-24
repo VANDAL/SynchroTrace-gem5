@@ -74,7 +74,8 @@ BaseKvmCPU::BaseKvmCPU(BaseKvmCPUParams *params)
       vcpuID(vm.allocVCPUID()), vcpuFD(-1), vcpuMMapSize(0),
       _kvmRun(NULL), mmioRing(NULL),
       pageSize(sysconf(_SC_PAGE_SIZE)),
-      tickEvent(*this),
+      tickEvent([this]{ tick(); }, "BaseKvmCPU tick",
+                false, Event::CPU_Tick_Pri),
       activeInstPeriod(0),
       perfControlledByTimer(params->usePerfOverflow),
       hostFactor(params->hostFactor),
@@ -164,8 +165,7 @@ BaseKvmCPU::startup()
     thread->startup();
 
     Event *startupEvent(
-        new EventWrapper<BaseKvmCPU,
-                         &BaseKvmCPU::startupThread>(this, true));
+        new EventFunctionWrapper([this]{ startupThread(); }, name(), true));
     schedule(startupEvent, curTick());
 }
 

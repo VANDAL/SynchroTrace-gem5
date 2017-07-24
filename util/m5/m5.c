@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011 ARM Limited
+ * Copyright (c) 2011, 2017 ARM Limited
  * All rights reserved
  *
  * The license below extends only to copyright in the software and shall
@@ -43,6 +43,7 @@
 #ifdef linux
 #define _GNU_SOURCE
 #include <sched.h>
+
 #endif
 
 #include <err.h>
@@ -107,9 +108,9 @@ parse_str_args_to_regs(int argc, char *argv[], uint64_t regs[], int len)
 int
 read_file(int dest_fid)
 {
-    char buf[256*1024];
+    uint8_t buf[256*1024];
     int offset = 0;
-    int len;
+    int len, ret;
 
     // Touch all buffer pages to ensure they are mapped in the
     // page table. This is required in the case of X86_FS, where
@@ -117,12 +118,28 @@ read_file(int dest_fid)
     memset(buf, 0, sizeof(buf));
 
     while ((len = m5_readfile(buf, sizeof(buf), offset)) > 0) {
-        write(dest_fid, buf, len);
+        uint8_t *base = buf;
         offset += len;
+        do {
+            ret = write(dest_fid, base, len);
+            if (ret < 0) {
+                perror("Failed to write file");
+                exit(2);
+            } else if (ret == 0) {
+                fprintf(stderr, "Failed to write file: "
+                        "Unhandled short write\n");
+                exit(2);
+            }
+
+            base += ret;
+            len -= ret;
+        } while (len);
     }
+
+    return offset;
 }
 
-int
+void
 write_file(const char *filename)
 {
     fprintf(stderr, "opening %s\n", filename);
@@ -241,14 +258,24 @@ do_checkpoint(int argc, char *argv[])
 }
 
 void
-do_load_symbol(int argc, char *argv[])
+do_addsymbol(int argc, char *argv[])
 {
     if (argc != 2)
         usage();
 
     uint64_t addr = strtoul(argv[0], NULL, 0);
     char *symbol = argv[1];
-    m5_loadsymbol(addr, symbol);
+    m5_addsymbol(addr, symbol);
+}
+
+
+void
+do_loadsymbol(int argc, char *argv[])
+{
+    if (argc > 0)
+        usage();
+
+    m5_loadsymbol();
 }
 
 void
@@ -320,8 +347,10 @@ struct MainFunc mainfuncs[] = {
     { "writefile",      do_write_file,       "<filename>" },
     { "execfile",       do_exec_file,        "" },
     { "checkpoint",     do_checkpoint,       "[delay [period]]" },
-    { "loadsymbol",     do_load_symbol,      "<address> <symbol>" },
-    { "initparam",      do_initparam,        "[key] // key must be shorter than 16 chars" },
+    { "addsymbol",      do_addsymbol,        "<address> <symbol>" },
+    { "loadsymbol",     do_loadsymbol,       "" },
+    { "initparam",      do_initparam,        "[key] // key must be shorter"
+                                             " than 16 chars" },
     { "sw99param",      do_sw99param,        "" },
 #ifdef linux
     { "pin",            do_pin,              "<cpu> <program> [args ...]" }
@@ -357,7 +386,8 @@ map_m5_mem()
         exit(1);
     }
 
-    m5_mem = mmap(NULL, 0x10000, PROT_READ | PROT_WRITE, MAP_SHARED, fd, M5OP_ADDR);
+    m5_mem = mmap(NULL, 0x10000, PROT_READ | PROT_WRITE, MAP_SHARED, fd,
+                  M5OP_ADDR);
     if (!m5_mem) {
         perror("Can't mmap /dev/mem");
         exit(1);
