@@ -1,22 +1,22 @@
-#SYNCHROTRACE
+# SYNCHROTRACE
 
-##What is it?
+## What is it?
 
 A fast computer-architecture simulation framework for design space exploration.  
 [See here for details](http://vlsi.ece.drexel.edu/index.php?title=SynchroTrace)
 
 Two tools form the SynchroTrace Simulation Framework:
 
-1. [Sigil2 - Multi-Threaded Application Trace Capture Tool][Sigil2]
+1. [Prism - Multi-Threaded Application Trace Capture Tool][Prism]
 2. **Replay** - Event-Trace Replay Framework
   * This repo, from the [official SynchroTrace patch](http://reviews.gem5.org/r/3687)
 
-##Build and Run
+## Build and Run
 
 1. :exclamation: Check dependencies :exclamation:
   * please see gem5's dependency list: http://gem5.org/Dependencies
 2. Acquire SynchroTraces
-  * Generate [multi-threaded event traces][Sigil2] for your program binary ***OR***
+  * Generate [multi-threaded event traces][Prism] for your program binary ***OR***
   * Use included sample traces
 3. Build SynchroTrace
 
@@ -62,3 +62,4 @@ Two tools form the SynchroTrace Simulation Framework:
    Simulated metrics are placed in **`m5out/stats.txt`**.
 
 [Sigil2]: https://github.com/VANDAL/Sigil2
+[Prism]: https://github.com/VANDAL/prism
