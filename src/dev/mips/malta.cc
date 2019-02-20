@@ -39,17 +39,14 @@
 #include <string>
 #include <vector>
 
-#include "config/the_isa.hh"
 #include "cpu/intr_control.hh"
 #include "debug/Malta.hh"
 #include "dev/mips/malta_cchip.hh"
 #include "dev/mips/malta_io.hh"
-#include "dev/terminal.hh"
 #include "params/Malta.hh"
 #include "sim/system.hh"
 
 using namespace std;
-using namespace TheISA;
 
 Malta::Malta(const Params *p)
     : Platform(p), system(p->system)

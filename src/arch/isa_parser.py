@@ -1,4 +1,4 @@
-# Copyright (c) 2014, 2016 ARM Limited
+# Copyright (c) 2014, 2016, 2019 ARM Limited
 # All rights reserved
 #
 # The license below extends only to copyright in the software and shall
@@ -39,7 +39,7 @@
 #
 # Authors: Steve Reinhardt
 
-from __future__ import with_statement
+from __future__ import with_statement, print_function
 import os
 import sys
 import re
@@ -122,8 +122,6 @@ class Template(object):
         # Protect non-Python-dict substitutions (e.g. if there's a printf
         # in the templated C++ code)
         template = self.parser.protectNonSubstPercents(self.template)
-        # CPU-model-specific substitutions are handled later (in GenCode).
-        template = self.parser.protectCpuSymbols(template)
 
         # Build a dict ('myDict') to use for the template substitution.
         # Start with the template namespace.  Make a copy since we're
@@ -144,7 +142,7 @@ class Template(object):
             del myDict['snippets']
 
             snippetLabels = [l for l in labelRE.findall(template)
-                             if d.snippets.has_key(l)]
+                             if l in d.snippets]
 
             snippets = dict([(s, self.parser.mungeSnippet(d.snippets[s]))
                              for s in snippetLabels])
@@ -218,11 +216,9 @@ class Template(object):
             raise TypeError, "Template.subst() arg must be or have dictionary"
         return template % myDict
 
-    # Convert to string.  This handles the case when a template with a
-    # CPU-specific term gets interpolated into another template or into
-    # an output block.
+    # Convert to string.
     def __str__(self):
-        return self.parser.expandCpuSymbolsToString(self.template)
+        return self.template
 
 ################
 # Format object.
@@ -284,23 +280,18 @@ class NoFormat(object):
 # strings containing code destined for decoder.hh and decoder.cc
 # respectively.  The decode_block attribute contains code to be
 # incorporated in the decode function itself (that will also end up in
-# decoder.cc).  The exec_output attribute is a dictionary with a key
-# for each CPU model name; the value associated with a particular key
-# is the string of code for that CPU model's exec.cc file.  The
-# has_decode_default attribute is used in the decode block to allow
-# explicit default clauses to override default default clauses.
+# decoder.cc).  The exec_output attribute  is the string of code for the
+# exec.cc file.  The has_decode_default attribute is used in the decode block
+# to allow explicit default clauses to override default default clauses.
 
 class GenCode(object):
-    # Constructor.  At this point we substitute out all CPU-specific
-    # symbols.  For the exec output, these go into the per-model
-    # dictionary.  For all other output types they get collapsed into
-    # a single string.
+    # Constructor.
     def __init__(self, parser,
                  header_output = '', decoder_output = '', exec_output = '',
                  decode_block = '', has_decode_default = False):
         self.parser = parser
-        self.header_output = parser.expandCpuSymbolsToString(header_output)
-        self.decoder_output = parser.expandCpuSymbolsToString(decoder_output)
+        self.header_output = header_output
+        self.decoder_output = decoder_output
         self.exec_output = exec_output
         self.decode_block = decode_block
         self.has_decode_default = has_decode_default
@@ -499,6 +490,9 @@ class Operand(object):
     def isVecElem(self):
         return 0
 
+    def isVecPredReg(self):
+        return 0
+
     def isPCState(self):
         return 0
 
@@ -626,35 +620,37 @@ class FloatRegOperand(Operand):
         return c_src + c_dest
 
     def makeRead(self, predRead):
-        bit_select = 0
-        if (self.ctype == 'float' or self.ctype == 'double'):
-            func = 'readFloatRegOperand'
-        else:
-            func = 'readFloatRegOperandBits'
         if self.read_code != None:
-            return self.buildReadCode(func)
+            return self.buildReadCode('readFloatRegOperandBits')
 
         if predRead:
             rindex = '_sourceIndex++'
         else:
             rindex = '%d' % self.src_reg_idx
 
-        return '%s = xc->%s(this, %s);\n' % \
-            (self.base_name, func, rindex)
+        code = 'xc->readFloatRegOperandBits(this, %s)' % rindex
+        if self.ctype == 'float':
+            code = 'bitsToFloat32(%s)' % code
+        elif self.ctype == 'double':
+            code = 'bitsToFloat64(%s)' % code
+        return '%s = %s;\n' % (self.base_name, code)
 
     def makeWrite(self, predWrite):
-        if (self.ctype == 'float' or self.ctype == 'double'):
-            func = 'setFloatRegOperand'
-        else:
-            func = 'setFloatRegOperandBits'
         if self.write_code != None:
-            return self.buildWriteCode(func)
+            return self.buildWriteCode('setFloatRegOperandBits')
 
         if predWrite:
             wp = '_destIndex++'
         else:
             wp = '%d' % self.dest_reg_idx
-        wp = 'xc->%s(this, %s, final_val);' % (func, wp)
+
+        val = 'final_val'
+        if self.ctype == 'float':
+            val = 'floatToBits32(%s)' % val
+        elif self.ctype == 'double':
+            val = 'floatToBits64(%s)' % val
+
+        wp = 'xc->setFloatRegOperandBits(this, %s, %s);' % (wp, val)
 
         wb = '''
         {
@@ -802,10 +798,9 @@ class VecRegOperand(Operand):
 
         wb = '''
         if (traceData) {
-            panic("Vectors not supported yet in tracedata");
-            /*traceData->setData(final_val);*/
+            traceData->setData(tmp_d%d);
         }
-        '''
+        ''' % self.dest_reg_idx
         return wb
 
     def finalize(self, predRead, predWrite):
@@ -814,7 +809,7 @@ class VecRegOperand(Operand):
             self.op_rd = self.makeReadW(predWrite) + self.op_rd
 
 class VecElemOperand(Operand):
-    reg_class = 'VectorElemClass'
+    reg_class = 'VecElemClass'
 
     def isReg(self):
         return 1
@@ -833,8 +828,6 @@ class VecElemOperand(Operand):
         c_dest = ''
 
         numAccessNeeded = 1
-        regId = 'RegId(%s, %s * numVecElemPerVecReg + elemIdx, %s)' % \
-                (self.reg_class, self.reg_spec)
 
         if self.is_src:
             c_src = ('\n\t_srcRegIdx[_numSrcRegs++] = RegId(%s, %s, %s);' %
@@ -847,16 +840,109 @@ class VecElemOperand(Operand):
         return c_src + c_dest
 
     def makeRead(self, predRead):
-        c_read = ('\n/* Elem is kept inside the operand description */' +
-                  '\n\tVecElem %s = xc->readVecElemOperand(this, %d);' %
-                  (self.base_name, self.src_reg_idx))
-        return c_read
+        c_read = 'xc->readVecElemOperand(this, %d)' % self.src_reg_idx
+
+        if self.ctype == 'float':
+            c_read = 'bitsToFloat32(%s)' % c_read
+        elif self.ctype == 'double':
+            c_read = 'bitsToFloat64(%s)' % c_read
+
+        return '\n\t%s %s = %s;\n' % (self.ctype, self.base_name, c_read)
 
     def makeWrite(self, predWrite):
-        c_write = ('\n/* Elem is kept inside the operand description */' +
-                   '\n\txc->setVecElemOperand(this, %d, %s);' %
-                   (self.dest_reg_idx, self.base_name))
+        if self.ctype == 'float':
+            c_write = 'floatToBits32(%s)' % self.base_name
+        elif self.ctype == 'double':
+            c_write = 'floatToBits64(%s)' % self.base_name
+        else:
+            c_write = self.base_name
+
+        c_write = ('\n\txc->setVecElemOperand(this, %d, %s);' %
+                  (self.dest_reg_idx, c_write))
+
         return c_write
+
+class VecPredRegOperand(Operand):
+    reg_class = 'VecPredRegClass'
+
+    def __init__(self, parser, full_name, ext, is_src, is_dest):
+        Operand.__init__(self, parser, full_name, ext, is_src, is_dest)
+        self.parser = parser
+
+    def isReg(self):
+        return 1
+
+    def isVecPredReg(self):
+        return 1
+
+    def makeDecl(self):
+        return ''
+
+    def makeConstructor(self, predRead, predWrite):
+        c_src = ''
+        c_dest = ''
+
+        if self.is_src:
+            c_src = src_reg_constructor % (self.reg_class, self.reg_spec)
+
+        if self.is_dest:
+            c_dest = dst_reg_constructor % (self.reg_class, self.reg_spec)
+            c_dest += '\n\t_numVecPredDestRegs++;'
+
+        return c_src + c_dest
+
+    def makeRead(self, predRead):
+        func = 'readVecPredRegOperand'
+        if self.read_code != None:
+            return self.buildReadCode(func)
+
+        if predRead:
+            rindex = '_sourceIndex++'
+        else:
+            rindex = '%d' % self.src_reg_idx
+
+        c_read =  '\t\t%s& tmp_s%s = xc->%s(this, %s);\n' % (
+                'const TheISA::VecPredRegContainer', rindex, func, rindex)
+        if self.ext:
+            c_read += '\t\tauto %s = tmp_s%s.as<%s>();\n' % (
+                    self.base_name, rindex,
+                    self.parser.operandTypeMap[self.ext])
+        return c_read
+
+    def makeReadW(self, predWrite):
+        func = 'getWritableVecPredRegOperand'
+        if self.read_code != None:
+            return self.buildReadCode(func)
+
+        if predWrite:
+            rindex = '_destIndex++'
+        else:
+            rindex = '%d' % self.dest_reg_idx
+
+        c_readw = '\t\t%s& tmp_d%s = xc->%s(this, %s);\n' % (
+                'TheISA::VecPredRegContainer', rindex, func, rindex)
+        if self.ext:
+            c_readw += '\t\tauto %s = tmp_d%s.as<%s>();\n' % (
+                    self.base_name, rindex,
+                    self.parser.operandTypeMap[self.ext])
+        return c_readw
+
+    def makeWrite(self, predWrite):
+        func = 'setVecPredRegOperand'
+        if self.write_code != None:
+            return self.buildWriteCode(func)
+
+        wb = '''
+        if (traceData) {
+            traceData->setData(tmp_d%d);
+        }
+        ''' % self.dest_reg_idx
+        return wb
+
+    def finalize(self, predRead, predWrite):
+        super(VecPredRegOperand, self).finalize(predRead, predWrite)
+        if self.is_dest:
+            self.op_rd = self.makeReadW(predWrite) + self.op_rd
 
 class CCRegOperand(Operand):
     reg_class = 'CCRegClass'
@@ -1111,6 +1197,7 @@ class OperandList(object):
         self.numFPDestRegs = 0
         self.numIntDestRegs = 0
         self.numVecDestRegs = 0
+        self.numVecPredDestRegs = 0
         self.numCCDestRegs = 0
         self.numMiscDestRegs = 0
         self.memOperand = None
@@ -1134,6 +1221,8 @@ class OperandList(object):
                         self.numIntDestRegs += 1
                     elif op_desc.isVecReg():
                         self.numVecDestRegs += 1
+                    elif op_desc.isVecPredReg():
+                        self.numVecPredDestRegs += 1
                     elif op_desc.isCCReg():
                         self.numCCDestRegs += 1
                     elif op_desc.isControlReg():
@@ -1342,6 +1431,7 @@ class InstObjParams(object):
         header += '\n\t_numFPDestRegs = 0;'
         header += '\n\t_numVecDestRegs = 0;'
         header += '\n\t_numVecElemDestRegs = 0;'
+        header += '\n\t_numVecPredDestRegs = 0;'
         header += '\n\t_numIntDestRegs = 0;'
         header += '\n\t_numCCDestRegs = 0;'
 
@@ -1462,25 +1552,11 @@ class LineTracker(object):
 #
 
 class ISAParser(Grammar):
-    class CpuModel(object):
-        def __init__(self, name, filename, includes, strings):
-            self.name = name
-            self.filename = filename
-            self.includes = includes
-            self.strings = strings
-
     def __init__(self, output_dir):
         super(ISAParser, self).__init__()
         self.output_dir = output_dir
 
         self.filename = None # for output file watermarking/scaremongering
-
-        self.cpuModels = [
-            ISAParser.CpuModel('ExecContext',
-                               'generic_cpu_exec.cc',
-                               '#include "cpu/exec_context.hh"',
-                               { "CPU_exec_context" : "ExecContext" }),
-            ]
 
         # variable to hold templates
         self.templateMap = {}
@@ -1560,11 +1636,11 @@ class ISAParser(Grammar):
         # select the different chunks. If no 'split' directives are used,
         # the cpp emissions have no effect.
         if re.search('-ns.cc.inc$', filename):
-            print >>f, '#if !defined(__SPLIT) || (__SPLIT == 1)'
+            print('#if !defined(__SPLIT) || (__SPLIT == 1)', file=f)
             self.splits[f] = 1
         # ensure requisite #include's
         elif filename == 'decoder-g.hh.inc':
-            print >>f, '#include "base/bitfield.hh"'
+            print('#include "base/bitfield.hh"', file=f)
 
         return f
 
@@ -1573,46 +1649,34 @@ class ISAParser(Grammar):
     # These small files make it much clearer how this tool works, since
     # you directly see the chunks emitted as files that are #include'd.
     def write_top_level_files(self):
-        dep = self.open('inc.d', bare=True)
-
         # decoder header - everything depends on this
         file = 'decoder.hh'
         with self.open(file) as f:
-            inc = []
-
             fn = 'decoder-g.hh.inc'
             assert(fn in self.files)
             f.write('#include "%s"\n' % fn)
-            inc.append(fn)
 
             fn = 'decoder-ns.hh.inc'
             assert(fn in self.files)
             f.write('namespace %s {\n#include "%s"\n}\n'
                     % (self.namespace, fn))
-            inc.append(fn)
-
-            print >>dep, file+':', ' '.join(inc)
 
         # decoder method - cannot be split
         file = 'decoder.cc'
         with self.open(file) as f:
-            inc = []
+            fn = 'base/compiler.hh'
+            f.write('#include "%s"\n' % fn)
 
             fn = 'decoder-g.cc.inc'
             assert(fn in self.files)
             f.write('#include "%s"\n' % fn)
-            inc.append(fn)
 
             fn = 'decoder.hh'
             f.write('#include "%s"\n' % fn)
-            inc.append(fn)
 
             fn = 'decode-method.cc.inc'
             # is guaranteed to have been written for parse to complete
             f.write('#include "%s"\n' % fn)
-            inc.append(fn)
-
-            print >>dep, file+':', ' '.join(inc)
 
         extn = re.compile('(\.[^\.]+)$')
 
@@ -1625,63 +1689,41 @@ class ISAParser(Grammar):
             else:
                 file = file_
             with self.open(file) as f:
-                inc = []
-
                 fn = 'decoder-g.cc.inc'
                 assert(fn in self.files)
                 f.write('#include "%s"\n' % fn)
-                inc.append(fn)
 
                 fn = 'decoder.hh'
                 f.write('#include "%s"\n' % fn)
-                inc.append(fn)
 
                 fn = 'decoder-ns.cc.inc'
                 assert(fn in self.files)
-                print >>f, 'namespace %s {' % self.namespace
+                print('namespace %s {' % self.namespace, file=f)
                 if splits > 1:
-                    print >>f, '#define __SPLIT %u' % i
-                print >>f, '#include "%s"' % fn
-                print >>f, '}'
-                inc.append(fn)
+                    print('#define __SPLIT %u' % i, file=f)
+                print('#include "%s"' % fn, file=f)
+                print('}', file=f)
 
-                print >>dep, file+':', ' '.join(inc)
-
-        # instruction execution per-CPU model
+        # instruction execution
         splits = self.splits[self.get_file('exec')]
-        for cpu in self.cpuModels:
-            for i in range(1, splits+1):
+        for i in range(1, splits+1):
+            file = 'generic_cpu_exec.cc'
+            if splits > 1:
+                file = extn.sub(r'_%d\1' % i, file)
+            with self.open(file) as f:
+                fn = 'exec-g.cc.inc'
+                assert(fn in self.files)
+                f.write('#include "%s"\n' % fn)
+                f.write('#include "cpu/exec_context.hh"\n')
+                f.write('#include "decoder.hh"\n')
+
+                fn = 'exec-ns.cc.inc'
+                assert(fn in self.files)
+                print('namespace %s {' % self.namespace, file=f)
                 if splits > 1:
-                    file = extn.sub(r'_%d\1' % i, cpu.filename)
-                else:
-                    file = cpu.filename
-                with self.open(file) as f:
-                    inc = []
-
-                    fn = 'exec-g.cc.inc'
-                    assert(fn in self.files)
-                    f.write('#include "%s"\n' % fn)
-                    inc.append(fn)
-
-                    f.write(cpu.includes+"\n")
-
-                    fn = 'decoder.hh'
-                    f.write('#include "%s"\n' % fn)
-                    inc.append(fn)
-
-                    fn = 'exec-ns.cc.inc'
-                    assert(fn in self.files)
-                    print >>f, 'namespace %s {' % self.namespace
-                    print >>f, '#define CPU_EXEC_CONTEXT %s' \
-                               % cpu.strings['CPU_exec_context']
-                    if splits > 1:
-                        print >>f, '#define __SPLIT %u' % i
-                    print >>f, '#include "%s"' % fn
-                    print >>f, '}'
-                    inc.append(fn)
-
-                    inc.append("decoder.hh")
-                    print >>dep, file+':', ' '.join(inc)
+                    print('#define __SPLIT %u' % i, file=f)
+                print('#include "%s"' % fn, file=f)
+                print('}', file=f)
 
         # max_inst_regs.hh
         self.update('max_inst_regs.hh',
@@ -1689,10 +1731,6 @@ class ISAParser(Grammar):
     const int MaxInstSrcRegs = %(maxInstSrcRegs)d;
     const int MaxInstDestRegs = %(maxInstDestRegs)d;
     const int MaxMiscDestRegs = %(maxMiscDestRegs)d;\n}\n''' % self)
-        print >>dep, 'max_inst_regs.hh:'
-
-        dep.close()
-
 
     scaremonger_template ='''// DO NOT EDIT
 // This file was automatically generated from an ISA description:
@@ -1955,13 +1993,10 @@ class ISAParser(Grammar):
 
     # Massage output block by substituting in template definitions and
     # bit operators.  We handle '%'s embedded in the string that don't
-    # indicate template substitutions (or CPU-specific symbols, which
-    # get handled in GenCode) by doubling them first so that the
+    # indicate template substitutions by doubling them first so that the
     # format operation will reduce them back to single '%'s.
     def process_output(self, s):
         s = self.protectNonSubstPercents(s)
-        # protects cpu-specific symbols too
-        s = self.protectCpuSymbols(s)
         return substBitOps(s % self.templateMap)
 
     def p_output(self, t):
@@ -2001,6 +2036,7 @@ del wrap
         try:
             exec split_setup+fixPythonIndentation(t[2]) in self.exportContext
         except Exception, exc:
+            traceback.print_exc(file=sys.stdout)
             if debug:
                 raise
             error(t.lineno(1), 'In global let block: %s' % exc)
@@ -2086,7 +2122,7 @@ del wrap
     def p_def_template(self, t):
         'def_template : DEF TEMPLATE ID CODELIT SEMI'
         if t[3] in self.templateMap:
-            print "warning: template %s already defined" % t[3]
+            print("warning: template %s already defined" % t[3])
         self.templateMap[t[3]] = Template(self, t[4])
 
     # An instruction format definition looks like
@@ -2273,7 +2309,8 @@ StaticInstPtr
         codeObj = t[3]
         # just wrap the decoding code from the block as a case in the
         # outer switch statement.
-        codeObj.wrap_decode_block('\n%s\n' % ''.join(case_list))
+        codeObj.wrap_decode_block('\n%s\n' % ''.join(case_list),
+                                  'M5_UNREACHABLE;\n')
         codeObj.has_decode_default = (case_list == ['default:'])
         t[0] = codeObj
 
@@ -2459,40 +2496,6 @@ StaticInstPtr
 
         # create new object and store in global map
         self.formatMap[id] = Format(id, params, code)
-
-    def expandCpuSymbolsToDict(self, template):
-        '''Expand template with CPU-specific references into a
-        dictionary with an entry for each CPU model name.  The entry
-        key is the model name and the corresponding value is the
-        template with the CPU-specific refs substituted for that
-        model.'''
-
-        # Protect '%'s that don't go with CPU-specific terms
-        t = re.sub(r'%(?!\(CPU_)', '%%', template)
-        result = {}
-        for cpu in self.cpuModels:
-            result[cpu.name] = t % cpu.strings
-        return result
-
-    def expandCpuSymbolsToString(self, template):
-        '''*If* the template has CPU-specific references, return a
-        single string containing a copy of the template for each CPU
-        model with the corresponding values substituted in.  If the
-        template has no CPU-specific references, it is returned
-        unmodified.'''
-
-        if template.find('%(CPU_') != -1:
-            return reduce(lambda x,y: x+y,
-                          self.expandCpuSymbolsToDict(template).values())
-        else:
-            return template
-
-    def protectCpuSymbols(self, template):
-        '''Protect CPU-specific references by doubling the
-        corresponding '%'s (in preparation for substituting a different
-        set of references into the template).'''
-
-        return re.sub(r'%(?=\(CPU_)', '%%', template)
 
     def protectNonSubstPercents(self, s):
         '''Protect any non-dict-substitution '%'s in a format string
@@ -2705,9 +2708,9 @@ StaticInstPtr
         try:
             self._parse_isa_desc(*args, **kwargs)
         except ISAParserError, e:
-            print backtrace(self.fileNameStack)
-            print "At %s:" % e.lineno
-            print e
+            print(backtrace(self.fileNameStack))
+            print("At %s:" % e.lineno)
+            print(e)
             sys.exit(1)
 
 # Called as script: get args from command line.

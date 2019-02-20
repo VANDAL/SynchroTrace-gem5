@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2014, 2017 ARM Limited
+ * Copyright (c) 2011-2014, 2017-2019 ARM Limited
  * All rights reserved
  *
  * The license below extends only to copyright in the software and shall
@@ -37,6 +37,7 @@
  * Authors: Dam Sunwoo
  *          Matt Horsnell
  *          Andreas Sandberg
+ *          Jose Marinho
  */
 
 #include "arch/arm/pmu.hh"
@@ -48,12 +49,12 @@
 #include "debug/Checkpoint.hh"
 #include "debug/PMUVerbose.hh"
 #include "dev/arm/base_gic.hh"
-#include "dev/arm/realview.hh"
+#include "dev/arm/generic_timer.hh"
 #include "params/ArmPMU.hh"
 
 namespace ArmISA {
 
-const MiscReg PMU::reg_pmcr_wr_mask = 0x39;
+const RegVal PMU::reg_pmcr_wr_mask = 0x39;
 
 PMU::PMU(const ArmPMUParams *p)
     : SimObject(p), BaseISADevice(),
@@ -61,17 +62,22 @@ PMU::PMU(const ArmPMUParams *p)
       reg_pmselr(0), reg_pminten(0), reg_pmovsr(0),
       reg_pmceid0(0),reg_pmceid1(0),
       clock_remainder(0),
-      counters(p->eventCounters),
+      maximumCounterCount(p->eventCounters),
+      cycleCounter(*this, maximumCounterCount),
+      cycleCounterEventId(p->cycleEventId),
+      swIncrementEvent(nullptr),
       reg_pmcr_conf(0),
-      pmuInterrupt(p->pmuInterrupt),
-      platform(p->platform)
+      interrupt(nullptr)
 {
     DPRINTF(PMUVerbose, "Initializing the PMU.\n");
 
-    if (p->eventCounters > 31) {
+    if (maximumCounterCount > 31) {
         fatal("The PMU can only accept 31 counters, %d counters requested.\n",
-              p->eventCounters);
+              maximumCounterCount);
     }
+
+    warn_if(!p->interrupt, "ARM PMU: No interrupt specified, interrupt " \
+            "delivery disabled.\n");
 
     /* Setup the performance counter ID registers */
     reg_pmcr_conf.imp = 0x41;    // ARM Ltd.
@@ -88,12 +94,66 @@ PMU::~PMU()
 }
 
 void
+PMU::setThreadContext(ThreadContext *tc)
+{
+    DPRINTF(PMUVerbose, "Assigning PMU to ContextID %i.\n", tc->contextId());
+    auto pmu_params = static_cast<const ArmPMUParams *>(params());
+
+    if (pmu_params->interrupt)
+        interrupt = pmu_params->interrupt->get(tc);
+}
+
+void
+PMU::addSoftwareIncrementEvent(unsigned int id)
+{
+    auto old_event = eventMap.find(id);
+    DPRINTF(PMUVerbose, "PMU: Adding SW increment event with id '0x%x'\n", id);
+
+    if (swIncrementEvent) {
+        fatal_if(old_event == eventMap.end() ||
+                 old_event->second != swIncrementEvent,
+                 "Trying to add a software increment event with multiple"
+                 "IDs. This is not supported.\n");
+        return;
+    }
+
+    fatal_if(old_event != eventMap.end(), "An event with id %d has "
+             "been previously defined\n", id);
+
+    swIncrementEvent = new SWIncrementEvent();
+    eventMap[id] = swIncrementEvent;
+    registerEvent(id);
+}
+
+void
 PMU::addEventProbe(unsigned int id, SimObject *obj, const char *probe_name)
 {
-    DPRINTF(PMUVerbose, "PMU: Adding event type '0x%x' as probe %s:%s\n",
-            id, obj->name(), probe_name);
-    pmuEventTypes.insert(std::make_pair(id, EventType(obj, probe_name)));
 
+    DPRINTF(PMUVerbose, "PMU: Adding Probe Driven event with id '0x%x'"
+        "as probe %s:%s\n",id, obj->name(), probe_name);
+
+    RegularEvent *event = nullptr;
+    auto event_entry = eventMap.find(id);
+    if (event_entry == eventMap.end()) {
+
+        event = new RegularEvent();
+        eventMap[id] = event;
+
+    } else {
+        event = dynamic_cast<RegularEvent*>(event_entry->second);
+        if (!event) {
+            fatal("Event with id %d is not probe driven\n", id);
+        }
+    }
+    event->addMicroarchitectureProbe(obj, probe_name);
+
+    registerEvent(id);
+
+}
+
+void
+PMU::registerEvent(uint32_t id)
+{
     // Flag the event as available in the corresponding PMCEID register if it
     // is an architected event.
     if (id < 0x20) {
@@ -115,7 +175,23 @@ PMU::drainResume()
 }
 
 void
-PMU::setMiscReg(int misc_reg, MiscReg val)
+PMU::regProbeListeners()
+{
+
+    // at this stage all probe configurations are done
+    // counters can be configured
+    for (uint32_t index = 0; index < maximumCounterCount-1; index++) {
+        counters.emplace_back(*this, index);
+    }
+
+    PMUEvent *event = getEvent(cycleCounterEventId);
+    panic_if(!event, "core cycle event is not present\n");
+    cycleCounter.enabled = true;
+    cycleCounter.attach(event);
+}
+
+void
+PMU::setMiscReg(int misc_reg, RegVal val)
 {
     DPRINTF(PMUVerbose, "setMiscReg(%s, 0x%x)\n",
             miscRegName[unflattenMiscReg(misc_reg)], val);
@@ -140,21 +216,19 @@ PMU::setMiscReg(int misc_reg, MiscReg val)
 
       case MISCREG_PMOVSCLR_EL0:
       case MISCREG_PMOVSR:
-        reg_pmovsr &= ~val;
+        setOverflowStatus(reg_pmovsr & ~val);
         return;
 
       case MISCREG_PMSWINC_EL0:
       case MISCREG_PMSWINC:
-        for (int i = 0; i < counters.size(); ++i) {
-            CounterState &ctr(getCounter(i));
-            if (ctr.enabled && (val & (1 << i)))
-                ++ctr.value;
+        if (swIncrementEvent) {
+            swIncrementEvent->write(val);
         }
-        break;
+        return;
 
       case MISCREG_PMCCNTR_EL0:
       case MISCREG_PMCCNTR:
-        cycleCounter.value = val;
+        cycleCounter.setValue(val);
         return;
 
       case MISCREG_PMSELR_EL0:
@@ -214,7 +288,7 @@ PMU::setMiscReg(int misc_reg, MiscReg val)
 
       case MISCREG_PMOVSSET_EL0:
       case MISCREG_PMOVSSET:
-        reg_pmovsr |= val;
+        setOverflowStatus(reg_pmovsr | val);
         return;
 
       default:
@@ -225,16 +299,16 @@ PMU::setMiscReg(int misc_reg, MiscReg val)
          miscRegName[misc_reg]);
 }
 
-MiscReg
+RegVal
 PMU::readMiscReg(int misc_reg)
 {
-    MiscReg val(readMiscRegInt(misc_reg));
+    RegVal val(readMiscRegInt(misc_reg));
     DPRINTF(PMUVerbose, "readMiscReg(%s): 0x%x\n",
             miscRegName[unflattenMiscReg(misc_reg)], val);
     return val;
 }
 
-MiscReg
+RegVal
 PMU::readMiscRegInt(int misc_reg)
 {
     misc_reg = unflattenMiscReg(misc_reg);
@@ -276,10 +350,10 @@ PMU::readMiscRegInt(int misc_reg)
         return reg_pmceid1 & 0xFFFFFFFF;
 
       case MISCREG_PMCCNTR_EL0:
-        return cycleCounter.value;
+        return cycleCounter.getValue();
 
       case MISCREG_PMCCNTR:
-        return cycleCounter.value & 0xFFFFFFFF;
+        return cycleCounter.getValue() & 0xFFFFFFFF;
 
       case MISCREG_PMEVTYPER0_EL0...MISCREG_PMEVTYPER5_EL0:
         return getCounterTypeRegister(misc_reg - MISCREG_PMEVTYPER0_EL0);
@@ -293,8 +367,11 @@ PMU::readMiscRegInt(int misc_reg)
       case MISCREG_PMXEVTYPER:
         return getCounterTypeRegister(reg_pmselr.sel);
 
-      case MISCREG_PMEVCNTR0_EL0...MISCREG_PMEVCNTR5_EL0:
-        return getCounterValue(misc_reg - MISCREG_PMEVCNTR0_EL0) & 0xFFFFFFFF;
+      case MISCREG_PMEVCNTR0_EL0...MISCREG_PMEVCNTR5_EL0: {
+            return getCounterValue(misc_reg - MISCREG_PMEVCNTR0_EL0) &
+                0xFFFFFFFF;
+
+        }
 
       case MISCREG_PMXEVCNTR_EL0:
       case MISCREG_PMXEVCNTR:
@@ -332,7 +409,7 @@ PMU::setControlReg(PMCR_t val)
 
     if (val.c) {
         DPRINTF(PMUVerbose, "PMU reset cycle counter to zero.\n");
-        cycleCounter.value = 0;
+        cycleCounter.setValue(0);
     }
 
     // Reset the clock remainder if divide by 64-mode is toggled.
@@ -353,25 +430,74 @@ PMU::updateAllCounters()
         const bool enable(global_enable && (reg_pmcnten & (1 << i)));
         if (ctr.enabled != enable) {
             ctr.enabled = enable;
-            updateCounter(i, ctr);
+            updateCounter(ctr);
         }
     }
 
     const bool ccntr_enable(global_enable && (reg_pmcnten & (1 << PMCCNTR)));
     if (cycleCounter.enabled != ccntr_enable) {
         cycleCounter.enabled = ccntr_enable;
-        updateCounter(PMCCNTR, cycleCounter);
+        updateCounter(cycleCounter);
     }
 }
 
-bool
-PMU::isFiltered(const CounterState &ctr) const
+void
+PMU::PMUEvent::attachEvent(PMU::CounterState *user)
 {
-    assert(isa);
+    if (userCounters.empty()) {
+        enable();
+    }
+    userCounters.insert(user);
+    updateAttachedCounters();
+}
 
-    const PMEVTYPER_t filter(ctr.filter);
-    const SCR scr(isa->readMiscRegNoEffect(MISCREG_SCR));
-    const CPSR cpsr(isa->readMiscRegNoEffect(MISCREG_CPSR));
+void
+PMU::PMUEvent::increment(const uint64_t val)
+{
+    for (auto& counter: userCounters) {
+        counter->add(val);
+    }
+}
+
+void
+PMU::PMUEvent::detachEvent(PMU::CounterState *user)
+{
+    userCounters.erase(user);
+
+    if (userCounters.empty()) {
+        disable();
+    }
+}
+
+void
+PMU::RegularEvent::RegularProbe::notify(const uint64_t &val)
+{
+    parentEvent->increment(val);
+}
+
+void
+PMU::RegularEvent::enable()
+{
+    for (auto& subEvents: microArchitectureEventSet) {
+        attachedProbePointList.emplace_back(
+            new RegularProbe(this, subEvents.first, subEvents.second));
+    }
+}
+
+void
+PMU::RegularEvent::disable()
+{
+    attachedProbePointList.clear();
+}
+
+bool
+PMU::CounterState::isFiltered() const
+{
+    assert(pmu.isa);
+
+    const PMEVTYPER_t filter(this->filter);
+    const SCR scr(pmu.isa->readMiscRegNoEffect(MISCREG_SCR));
+    const CPSR cpsr(pmu.isa->readMiscRegNoEffect(MISCREG_CPSR));
     const ExceptionLevel el(opModeToEL((OperatingMode)(uint8_t)cpsr.mode));
     const bool secure(inSecureState(scr, cpsr));
 
@@ -394,60 +520,72 @@ PMU::isFiltered(const CounterState &ctr) const
 }
 
 void
-PMU::handleEvent(CounterId id, uint64_t delta)
+PMU::CounterState::detach()
 {
-    CounterState &ctr(getCounter(id));
-    const bool overflowed(reg_pmovsr & (1 << id));
-
-    if (isFiltered(ctr))
-        return;
-
-    // Handle the "count every 64 cycles" mode
-    if (id == PMCCNTR && reg_pmcr.d) {
-        clock_remainder += delta;
-        delta = (clock_remainder >> 6);
-        clock_remainder &= 63;
-    }
-
-    // Add delta and handle (new) overflows
-    if (ctr.add(delta) && !overflowed) {
-        DPRINTF(PMUVerbose, "PMU counter '%i' overflowed.\n", id);
-        reg_pmovsr |= (1 << id);
-        // Deliver a PMU interrupt if interrupt delivery is enabled
-        // for this counter.
-        if (reg_pminten  & (1 << id))
-            raiseInterrupt();
+    if (sourceEvent) {
+        sourceEvent->detachEvent(this);
+        sourceEvent = nullptr;
+    } else {
+        debugCounter("detaching event not currently attached"
+            " to any event\n");
     }
 }
 
 void
-PMU::updateCounter(CounterId id, CounterState &ctr)
+PMU::CounterState::attach(PMUEvent* event)
+{
+    if (!resetValue) {
+      value = 0;
+      resetValue = true;
+    }
+    sourceEvent = event;
+    sourceEvent->attachEvent(this);
+}
+
+uint64_t
+PMU::CounterState::getValue() const
+{
+    if (sourceEvent) {
+        sourceEvent->updateAttachedCounters();
+    } else {
+        debugCounter("attempted to get value from a counter without"
+            " an associated event\n");
+    }
+    return value;
+}
+
+void
+PMU::CounterState::setValue(uint64_t val)
+{
+    value = val;
+    resetValue = true;
+
+    if (sourceEvent) {
+        sourceEvent->updateAttachedCounters();
+    } else {
+        debugCounter("attempted to set value from a counter without"
+            " an associated event\n");
+    }
+}
+
+void
+PMU::updateCounter(CounterState &ctr)
 {
     if (!ctr.enabled) {
-        if (!ctr.listeners.empty()) {
-            DPRINTF(PMUVerbose, "updateCounter(%i): Disabling counter\n", id);
-            ctr.listeners.clear();
-        }
+        DPRINTF(PMUVerbose, "updateCounter(%i): Disabling counter\n",
+            ctr.getCounterId());
+        ctr.detach();
+
     } else {
         DPRINTF(PMUVerbose, "updateCounter(%i): Enable event id 0x%x\n",
-                id, ctr.eventId);
+                ctr.getCounterId(), ctr.eventId);
 
-        // Attach all probes belonging to this event
-        auto range(pmuEventTypes.equal_range(ctr.eventId));
-        for (auto it = range.first; it != range.second; ++it) {
-            const EventType &et(it->second);
-
-            DPRINTF(PMUVerbose, "\tProbe: %s:%s\n", et.obj->name(), et.name);
-            ctr.listeners.emplace_back(et.create(*this, id));
-        }
-
-        /* The SW_INCR event type is a special case which doesn't need
-         * any probes since it is controlled by software and the PMU
-         * itself.
-         */
-        if (ctr.listeners.empty() && ctr.eventId != ARCH_EVENT_SW_INCR) {
+        auto sourceEvent = eventMap.find(ctr.eventId);
+        if (sourceEvent == eventMap.end()) {
             warn("Can't enable PMU counter of type '0x%x': "
                  "No such event type.\n", ctr.eventId);
+        } else {
+            ctr.attach(sourceEvent->second);
         }
     }
 }
@@ -457,7 +595,7 @@ void
 PMU::resetEventCounts()
 {
     for (CounterState &ctr : counters)
-        ctr.value = 0;
+        ctr.setValue(0);
 }
 
 void
@@ -470,7 +608,7 @@ PMU::setCounterValue(CounterId id, uint64_t val)
     }
 
     CounterState &ctr(getCounter(id));
-    ctr.value = val;
+    ctr.setValue(val);
 }
 
 PMU::PMEVTYPER_t
@@ -507,21 +645,46 @@ PMU::setCounterTypeRegister(CounterId id, PMEVTYPER_t val)
     // need to update the probes the counter is using.
     if (id != PMCCNTR && old_event_id != val.evtCount) {
         ctr.eventId = val.evtCount;
-        updateCounter(reg_pmselr.sel, ctr);
+        updateCounter(ctr);
+    }
+}
+
+void
+PMU::setOverflowStatus(RegVal new_val)
+{
+    const bool int_old = reg_pmovsr != 0;
+    const bool int_new = new_val != 0;
+
+    reg_pmovsr = new_val;
+    if (int_old && !int_new) {
+        clearInterrupt();
+    } else if (!int_old && int_new && (reg_pminten & reg_pmovsr)) {
+        raiseInterrupt();
     }
 }
 
 void
 PMU::raiseInterrupt()
 {
-    RealView *rv(dynamic_cast<RealView *>(platform));
-    if (!rv || !rv->gic) {
-        warn_once("ARM PMU: GIC missing, can't raise interrupt.\n");
-        return;
+    if (interrupt) {
+        DPRINTF(PMUVerbose, "Delivering PMU interrupt.\n");
+        interrupt->raise();
+    } else {
+        warn_once("Dropping PMU interrupt as no interrupt has "
+                  "been specified\n");
     }
+}
 
-    DPRINTF(PMUVerbose, "Delivering PMU interrupt.\n");
-    rv->gic->sendInt(pmuInterrupt);
+void
+PMU::clearInterrupt()
+{
+    if (interrupt) {
+        DPRINTF(PMUVerbose, "Clearing PMU interrupt.\n");
+        interrupt->clear();
+    } else {
+        warn_once("Dropping PMU interrupt as no interrupt has "
+                  "been specified\n");
+    }
 }
 
 void
@@ -572,12 +735,24 @@ PMU::unserialize(CheckpointIn &cp)
     cycleCounter.unserializeSection(cp, "cycleCounter");
 }
 
+PMU::PMUEvent*
+PMU::getEvent(uint64_t eventId)
+{
+    auto entry = eventMap.find(eventId);
+
+    if (entry == eventMap.end()) {
+        warn("event %d does not exist\n", eventId);
+        return nullptr;
+    } else {
+        return entry->second;
+    }
+}
+
 void
 PMU::CounterState::serialize(CheckpointOut &cp) const
 {
     SERIALIZE_SCALAR(eventId);
     SERIALIZE_SCALAR(value);
-    SERIALIZE_SCALAR(enabled);
     SERIALIZE_SCALAR(overflow64);
 }
 
@@ -586,20 +761,53 @@ PMU::CounterState::unserialize(CheckpointIn &cp)
 {
     UNSERIALIZE_SCALAR(eventId);
     UNSERIALIZE_SCALAR(value);
-    UNSERIALIZE_SCALAR(enabled);
     UNSERIALIZE_SCALAR(overflow64);
 }
 
-bool
+uint64_t
 PMU::CounterState::add(uint64_t delta)
 {
-    const uint64_t msb(1ULL << (overflow64 ? 63 : 31));
-    const uint64_t old_value(value);
+    uint64_t value_until_overflow;
+    if (overflow64) {
+        value_until_overflow = UINT64_MAX - value;
+    } else {
+        value_until_overflow = UINT32_MAX - (uint32_t)value;
+    }
 
-    value += delta;
+    if (isFiltered())
+        return value_until_overflow;
 
-    // Overflow if the msb goes from 1 to 0
-    return (old_value & msb) && !(value & msb);
+    if (resetValue) {
+        delta = 0;
+        resetValue = false;
+    } else {
+        value += delta;
+    }
+
+    if (delta > value_until_overflow) {
+
+        // overflow situation detected
+        // flag the overflow occurence
+        pmu.reg_pmovsr |= (1 << counterId);
+
+        // Deliver a PMU interrupt if interrupt delivery is enabled
+        // for this counter.
+        if (pmu.reg_pminten  & (1 << counterId)) {
+            pmu.raiseInterrupt();
+        }
+        return overflow64 ? UINT64_MAX : UINT32_MAX;
+    }
+    return value_until_overflow - delta + 1;
+}
+
+void
+PMU::SWIncrementEvent::write(uint64_t val)
+{
+    for (auto& counter: userCounters) {
+        if (val & (0x1 << counter->getCounterId())) {
+            counter->add(1);
+        }
+    }
 }
 
 } // namespace ArmISA

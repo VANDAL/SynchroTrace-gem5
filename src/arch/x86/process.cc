@@ -54,12 +54,13 @@
 #include "arch/x86/types.hh"
 #include "base/loader/elf_object.hh"
 #include "base/loader/object_file.hh"
-#include "base/misc.hh"
+#include "base/logging.hh"
 #include "base/trace.hh"
 #include "cpu/thread_context.hh"
 #include "debug/Stack.hh"
 #include "mem/multi_level_page_table.hh"
 #include "mem/page_table.hh"
+#include "params/Process.hh"
 #include "sim/aux_vector.hh"
 #include "sim/process_impl.hh"
 #include "sim/syscall_desc.hh"
@@ -95,15 +96,30 @@ static const int ArgumentReg32[] = {
 static const int NumArgumentRegs32 M5_VAR_USED =
     sizeof(ArgumentReg) / sizeof(const int);
 
-X86Process::X86Process(ProcessParams * params, ObjectFile *objFile,
+template class MultiLevelPageTable<LongModePTE<47, 39>,
+                                   LongModePTE<38, 30>,
+                                   LongModePTE<29, 21>,
+                                   LongModePTE<20, 12> >;
+typedef MultiLevelPageTable<LongModePTE<47, 39>,
+                            LongModePTE<38, 30>,
+                            LongModePTE<29, 21>,
+                            LongModePTE<20, 12> > ArchPageTable;
+
+X86Process::X86Process(ProcessParams *params, ObjectFile *objFile,
                        SyscallDesc *_syscallDescs, int _numSyscallDescs)
-    : Process(params, objFile), syscallDescs(_syscallDescs),
-      numSyscallDescs(_numSyscallDescs)
+    : Process(params, params->useArchPT ?
+                      static_cast<EmulationPageTable *>(
+                              new ArchPageTable(params->name, params->pid,
+                                                params->system, PageBytes)) :
+                      new EmulationPageTable(params->name, params->pid,
+                                             PageBytes),
+              objFile),
+      syscallDescs(_syscallDescs), numSyscallDescs(_numSyscallDescs)
 {
 }
 
 void X86Process::clone(ThreadContext *old_tc, ThreadContext *new_tc,
-                       Process *p, TheISA::IntReg flags)
+                       Process *p, RegVal flags)
 {
     Process::clone(old_tc, new_tc, p, flags);
     X86Process *process = (X86Process*)p;
@@ -204,12 +220,19 @@ X86_64Process::initState()
     if (kvmInSE) {
         PortProxy physProxy = system->physProxy;
 
+        Addr syscallCodePhysAddr = system->allocPhysPages(1);
+        Addr gdtPhysAddr = system->allocPhysPages(1);
+        Addr idtPhysAddr = system->allocPhysPages(1);
+        Addr istPhysAddr = system->allocPhysPages(1);
+        Addr tssPhysAddr = system->allocPhysPages(1);
+        Addr pfHandlerPhysAddr = system->allocPhysPages(1);
+
         /*
          * Set up the gdt.
          */
         uint8_t numGDTEntries = 0;
         uint64_t nullDescriptor = 0;
-        physProxy.writeBlob(GDTPhysAddr + numGDTEntries * 8,
+        physProxy.writeBlob(gdtPhysAddr + numGDTEntries * 8,
                             (uint8_t *)(&nullDescriptor), 8);
         numGDTEntries++;
 
@@ -221,19 +244,16 @@ X86_64Process::initState()
         initDesc.p = 1;               // present
         initDesc.l = 1;               // longmode - 64 bit
         initDesc.d = 0;               // operand size
-        initDesc.g = 1;               // granularity
         initDesc.s = 1;               // system segment
-        initDesc.limitHigh = 0xFFFF;
-        initDesc.limitLow = 0xF;
-        initDesc.baseHigh = 0x0;
-        initDesc.baseLow = 0x0;
+        initDesc.limit = 0xFFFFFFFF;
+        initDesc.base = 0;
 
         //64 bit code segment
         SegDescriptor csLowPLDesc = initDesc;
         csLowPLDesc.type.codeOrData = 1;
         csLowPLDesc.dpl = 0;
         uint64_t csLowPLDescVal = csLowPLDesc;
-        physProxy.writeBlob(GDTPhysAddr + numGDTEntries * 8,
+        physProxy.writeBlob(gdtPhysAddr + numGDTEntries * 8,
                             (uint8_t *)(&csLowPLDescVal), 8);
 
         numGDTEntries++;
@@ -247,7 +267,7 @@ X86_64Process::initState()
         dsLowPLDesc.type.codeOrData = 0;
         dsLowPLDesc.dpl = 0;
         uint64_t dsLowPLDescVal = dsLowPLDesc;
-        physProxy.writeBlob(GDTPhysAddr + numGDTEntries * 8,
+        physProxy.writeBlob(gdtPhysAddr + numGDTEntries * 8,
                             (uint8_t *)(&dsLowPLDescVal), 8);
 
         numGDTEntries++;
@@ -261,7 +281,7 @@ X86_64Process::initState()
         dsDesc.type.codeOrData = 0;
         dsDesc.dpl = 3;
         uint64_t dsDescVal = dsDesc;
-        physProxy.writeBlob(GDTPhysAddr + numGDTEntries * 8,
+        physProxy.writeBlob(gdtPhysAddr + numGDTEntries * 8,
                             (uint8_t *)(&dsDescVal), 8);
 
         numGDTEntries++;
@@ -275,7 +295,7 @@ X86_64Process::initState()
         csDesc.type.codeOrData = 1;
         csDesc.dpl = 3;
         uint64_t csDescVal = csDesc;
-        physProxy.writeBlob(GDTPhysAddr + numGDTEntries * 8,
+        physProxy.writeBlob(gdtPhysAddr + numGDTEntries * 8,
                             (uint8_t *)(&csDescVal), 8);
 
         numGDTEntries++;
@@ -297,11 +317,8 @@ X86_64Process::initState()
         TSSDescLow.type = 0xB;
         TSSDescLow.dpl = 0; // Privelege level 0
         TSSDescLow.p = 1; // Present
-        TSSDescLow.g = 1; // Page granularity
-        TSSDescLow.limitHigh = 0xF;
-        TSSDescLow.limitLow = 0xFFFF;
-        TSSDescLow.baseLow = bits(TSSVirtAddr, 23, 0);
-        TSSDescLow.baseHigh = bits(TSSVirtAddr, 31, 24);
+        TSSDescLow.limit = 0xFFFFFFFF;
+        TSSDescLow.base = bits(TSSVirtAddr, 31, 0);
 
         TSShigh TSSDescHigh = 0;
         TSSDescHigh.base = bits(TSSVirtAddr, 63, 32);
@@ -311,7 +328,7 @@ X86_64Process::initState()
             uint64_t high;
         } tssDescVal = {TSSDescLow, TSSDescHigh};
 
-        physProxy.writeBlob(GDTPhysAddr + numGDTEntries * 8,
+        physProxy.writeBlob(gdtPhysAddr + numGDTEntries * 8,
                             (uint8_t *)(&tssDescVal), sizeof(tssDescVal));
 
         numGDTEntries++;
@@ -319,10 +336,8 @@ X86_64Process::initState()
         SegSelector tssSel = 0;
         tssSel.si = numGDTEntries - 1;
 
-        uint64_t tss_base_addr = (TSSDescHigh.base << 32) |
-                                 (TSSDescLow.baseHigh << 24) |
-                                  TSSDescLow.baseLow;
-        uint64_t tss_limit = TSSDescLow.limitLow | (TSSDescLow.limitHigh << 16);
+        uint64_t tss_base_addr = (TSSDescHigh.base << 32) | TSSDescLow.base;
+        uint64_t tss_limit = TSSDescLow.limit;
 
         SegAttr tss_attr = 0;
 
@@ -395,7 +410,7 @@ X86_64Process::initState()
             CR0 cr2 = 0;
             tc->setMiscReg(MISCREG_CR2, cr2);
 
-            CR3 cr3 = pageTablePhysAddr;
+            CR3 cr3 = dynamic_cast<ArchPageTable *>(pTable)->basePtr();
             tc->setMiscReg(MISCREG_CR3, cr3);
 
             CR4 cr4 = 0;
@@ -418,10 +433,6 @@ X86_64Process::initState()
             CR4 cr8 = 0;
             tc->setMiscReg(MISCREG_CR8, cr8);
 
-            const Addr PageMapLevel4 = pageTablePhysAddr;
-            //Point to the page tables.
-            tc->setMiscReg(MISCREG_CR3, PageMapLevel4);
-
             tc->setMiscReg(MISCREG_MXCSR, 0x1f80);
 
             tc->setMiscReg(MISCREG_APIC_BASE, 0xfee00900);
@@ -433,11 +444,11 @@ X86_64Process::initState()
             tc->setMiscReg(MISCREG_IDTR_LIMIT, 0xffff);
 
             /* enabling syscall and sysret */
-            MiscReg star = ((MiscReg)sret << 48) | ((MiscReg)scall << 32);
+            RegVal star = ((RegVal)sret << 48) | ((RegVal)scall << 32);
             tc->setMiscReg(MISCREG_STAR, star);
-            MiscReg lstar = (MiscReg)syscallCodeVirtAddr;
+            RegVal lstar = (RegVal)syscallCodeVirtAddr;
             tc->setMiscReg(MISCREG_LSTAR, lstar);
-            MiscReg sfmask = (1 << 8) | (1 << 10); // TF | DF
+            RegVal sfmask = (1 << 8) | (1 << 10); // TF | DF
             tc->setMiscReg(MISCREG_SF_MASK, sfmask);
         }
 
@@ -483,7 +494,7 @@ X86_64Process::initState()
         tss.RSP1_high = tss.IST1_high;
         tss.RSP2_low  = tss.IST1_low;
         tss.RSP2_high = tss.IST1_high;
-        physProxy.writeBlob(TSSPhysAddr, (uint8_t *)(&tss), sizeof(tss));
+        physProxy.writeBlob(tssPhysAddr, (uint8_t *)(&tss), sizeof(tss));
 
         /* Setting IDT gates */
         GateDescriptorLow PFGateLow = 0;
@@ -503,7 +514,7 @@ X86_64Process::initState()
             uint64_t high;
         } PFGate = {PFGateLow, PFGateHigh};
 
-        physProxy.writeBlob(IDTPhysAddr + 0xE0,
+        physProxy.writeBlob(idtPhysAddr + 0xE0,
                             (uint8_t *)(&PFGate), sizeof(PFGate));
 
         /* System call handler */
@@ -529,25 +540,24 @@ X86_64Process::initState()
             0x48, 0xcf
         };
 
-        physProxy.writeBlob(PFHandlerPhysAddr, faultBlob, sizeof(faultBlob));
-
-        MultiLevelPageTable<PageTableOps> *pt =
-            dynamic_cast<MultiLevelPageTable<PageTableOps> *>(pTable);
+        physProxy.writeBlob(pfHandlerPhysAddr, faultBlob, sizeof(faultBlob));
 
         /* Syscall handler */
-        pt->map(syscallCodeVirtAddr, syscallCodePhysAddr, PageBytes, false);
+        pTable->map(syscallCodeVirtAddr, syscallCodePhysAddr,
+                    PageBytes, false);
         /* GDT */
-        pt->map(GDTVirtAddr, GDTPhysAddr, PageBytes, false);
+        pTable->map(GDTVirtAddr, gdtPhysAddr, PageBytes, false);
         /* IDT */
-        pt->map(IDTVirtAddr, IDTPhysAddr, PageBytes, false);
+        pTable->map(IDTVirtAddr, idtPhysAddr, PageBytes, false);
         /* TSS */
-        pt->map(TSSVirtAddr, TSSPhysAddr, PageBytes, false);
+        pTable->map(TSSVirtAddr, tssPhysAddr, PageBytes, false);
         /* IST */
-        pt->map(ISTVirtAddr, ISTPhysAddr, PageBytes, false);
+        pTable->map(ISTVirtAddr, istPhysAddr, PageBytes, false);
         /* PF handler */
-        pt->map(PFHandlerVirtAddr, PFHandlerPhysAddr, PageBytes, false);
+        pTable->map(PFHandlerVirtAddr, pfHandlerPhysAddr, PageBytes, false);
         /* MMIO region for m5ops */
-        pt->map(MMIORegionVirtAddr, MMIORegionPhysAddr, 16*PageBytes, false);
+        pTable->map(MMIORegionVirtAddr, MMIORegionPhysAddr,
+                    16 * PageBytes, false);
     } else {
         for (int i = 0; i < contextIds.size(); i++) {
             ThreadContext * tc = system->getThreadContext(contextIds[i]);
@@ -990,20 +1000,22 @@ X86Process::argsInit(int pageSize,
     initVirtMem.writeString(file_name_base, filename.c_str());
 
     // Fix up the aux vectors which point to data
-    assert(auxv[auxv.size() - 3].a_type == M5_AT_RANDOM);
-    auxv[auxv.size() - 3].a_val = aux_data_base;
-    assert(auxv[auxv.size() - 2].a_type == M5_AT_EXECFN);
-    auxv[auxv.size() - 2].a_val = argv_array_base;
-    assert(auxv[auxv.size() - 1].a_type == M5_AT_PLATFORM);
-    auxv[auxv.size() - 1].a_val = aux_data_base + numRandomBytes;
+    assert(auxv[auxv.size() - 3].getHostAuxType() == M5_AT_RANDOM);
+    auxv[auxv.size() - 3].setAuxVal(aux_data_base);
+    assert(auxv[auxv.size() - 2].getHostAuxType() == M5_AT_EXECFN);
+    auxv[auxv.size() - 2].setAuxVal(argv_array_base);
+    assert(auxv[auxv.size() - 1].getHostAuxType() == M5_AT_PLATFORM);
+    auxv[auxv.size() - 1].setAuxVal(aux_data_base + numRandomBytes);
 
 
     // Copy the aux stuff
     for (int x = 0; x < auxv.size(); x++) {
         initVirtMem.writeBlob(auxv_array_base + x * 2 * intSize,
-                (uint8_t*)&(auxv[x].a_type), intSize);
+                              (uint8_t*)&(auxv[x].getAuxType()),
+                              intSize);
         initVirtMem.writeBlob(auxv_array_base + (x * 2 + 1) * intSize,
-                (uint8_t*)&(auxv[x].a_val), intSize);
+                              (uint8_t*)&(auxv[x].getAuxVal()),
+                              intSize);
     }
     // Write out the terminating zeroed auxiliary vector
     const uint64_t zero = 0;
@@ -1058,7 +1070,7 @@ X86Process::setSyscallReturn(ThreadContext *tc, SyscallReturn retval)
     tc->setIntReg(INTREG_RAX, retval.encodedValue());
 }
 
-X86ISA::IntReg
+RegVal
 X86_64Process::getSyscallArg(ThreadContext *tc, int &i)
 {
     assert(i < NumArgumentRegs);
@@ -1066,7 +1078,7 @@ X86_64Process::getSyscallArg(ThreadContext *tc, int &i)
 }
 
 void
-X86_64Process::setSyscallArg(ThreadContext *tc, int i, X86ISA::IntReg val)
+X86_64Process::setSyscallArg(ThreadContext *tc, int i, RegVal val)
 {
     assert(i < NumArgumentRegs);
     return tc->setIntReg(ArgumentReg[i], val);
@@ -1074,20 +1086,20 @@ X86_64Process::setSyscallArg(ThreadContext *tc, int i, X86ISA::IntReg val)
 
 void
 X86_64Process::clone(ThreadContext *old_tc, ThreadContext *new_tc,
-                     Process *p, TheISA::IntReg flags)
+                     Process *p, RegVal flags)
 {
     X86Process::clone(old_tc, new_tc, p, flags);
     ((X86_64Process*)p)->vsyscallPage = vsyscallPage;
 }
 
-X86ISA::IntReg
+RegVal
 I386Process::getSyscallArg(ThreadContext *tc, int &i)
 {
     assert(i < NumArgumentRegs32);
     return tc->readIntReg(ArgumentReg32[i++]);
 }
 
-X86ISA::IntReg
+RegVal
 I386Process::getSyscallArg(ThreadContext *tc, int &i, int width)
 {
     assert(width == 32 || width == 64);
@@ -1099,7 +1111,7 @@ I386Process::getSyscallArg(ThreadContext *tc, int &i, int width)
 }
 
 void
-I386Process::setSyscallArg(ThreadContext *tc, int i, X86ISA::IntReg val)
+I386Process::setSyscallArg(ThreadContext *tc, int i, RegVal val)
 {
     assert(i < NumArgumentRegs);
     return tc->setIntReg(ArgumentReg[i], val);
@@ -1107,7 +1119,7 @@ I386Process::setSyscallArg(ThreadContext *tc, int i, X86ISA::IntReg val)
 
 void
 I386Process::clone(ThreadContext *old_tc, ThreadContext *new_tc,
-                   Process *p, TheISA::IntReg flags)
+                   Process *p, RegVal flags)
 {
     X86Process::clone(old_tc, new_tc, p, flags);
     ((I386Process*)p)->vsyscallPage = vsyscallPage;

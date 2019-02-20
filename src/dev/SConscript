@@ -39,26 +39,18 @@ Source('dma_device.cc')
 DebugFlag('IsaFake')
 DebugFlag('DMA')
 
+SimObject('Platform.py')
+Source('platform.cc')
+
 if env['TARGET_ISA'] == 'null':
     Return()
 
 SimObject('BadDevice.py')
-SimObject('Platform.py')
-SimObject('Terminal.py')
-SimObject('Uart.py')
 
 Source('baddev.cc')
 Source('intel_8254_timer.cc')
 Source('mc146818.cc')
 Source('pixelpump.cc')
-Source('platform.cc')
-Source('ps2.cc')
-Source('terminal.cc')
-Source('uart.cc')
-Source('uart8250.cc')
 
 DebugFlag('Intel8254Timer')
 DebugFlag('MC146818')
-DebugFlag('Terminal')
-DebugFlag('TerminalVerbose')
-DebugFlag('Uart')

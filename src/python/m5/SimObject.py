@@ -1,4 +1,4 @@
-# Copyright (c) 2017 ARM Limited
+# Copyright (c) 2017-2018 ARM Limited
 # All rights reserved.
 #
 # The license below extends only to copyright in the software and shall
@@ -43,6 +43,8 @@
 #          Andreas Hansson
 #          Andreas Sandberg
 
+from __future__ import print_function
+
 import sys
 from types import FunctionType, MethodType, ModuleType
 from functools import wraps
@@ -51,6 +53,9 @@ import inspect
 import m5
 from m5.util import *
 from m5.util.pybind import *
+# Use the pyfdt and not the helper class, because the fdthelper
+# relies on the SimObject definition
+from m5.ext.pyfdt import pyfdt
 
 # Have to import params up top since Param is referenced on initial
 # load (when SimObject class references Param to create a class
@@ -402,7 +407,8 @@ class MetaSimObject(type):
         'cxx_type' : str,
         'cxx_header' : str,
         'type' : str,
-        'cxx_bases' : list,
+        'cxx_base' : (str, type(None)),
+        'cxx_extra_bases' : list,
         'cxx_exports' : list,
         'cxx_param_exports' : list,
     }
@@ -436,8 +442,8 @@ class MetaSimObject(type):
                 value_dict[key] = val
         if 'abstract' not in value_dict:
             value_dict['abstract'] = False
-        if 'cxx_bases' not in value_dict:
-            value_dict['cxx_bases'] = []
+        if 'cxx_extra_bases' not in value_dict:
+            value_dict['cxx_extra_bases'] = []
         if 'cxx_exports' not in value_dict:
             value_dict['cxx_exports'] = cxx_exports
         else:
@@ -477,8 +483,8 @@ class MetaSimObject(type):
             if isinstance(c, MetaSimObject):
                 bTotal += 1
             if bTotal > 1:
-                raise TypeError, \
-                      "SimObjects do not support multiple inheritance"
+                raise TypeError(
+                      "SimObjects do not support multiple inheritance")
 
         base = bases[0]
 
@@ -528,7 +534,7 @@ class MetaSimObject(type):
                 cls._new_port(key, val)
 
             # init-time-only keywords
-            elif cls.init_keywords.has_key(key):
+            elif key in cls.init_keywords:
                 cls._set_keyword(key, val, cls.init_keywords[key])
 
             # default: use normal path (ends up in __setattr__)
@@ -537,8 +543,8 @@ class MetaSimObject(type):
 
     def _set_keyword(cls, keyword, val, kwtype):
         if not isinstance(val, kwtype):
-            raise TypeError, 'keyword %s has bad type %s (expecting %s)' % \
-                  (keyword, type(val), kwtype)
+            raise TypeError('keyword %s has bad type %s (expecting %s)' % \
+                  (keyword, type(val), kwtype))
         if isinstance(val, FunctionType):
             val = classmethod(val)
         type.__setattr__(cls, keyword, val)
@@ -556,7 +562,7 @@ class MetaSimObject(type):
         try:
             hr_value = value
             value = param.convert(value)
-        except Exception, e:
+        except Exception as e:
             msg = "%s\nError setting param %s.%s to %s\n" % \
                   (e, cls.__name__, name, value)
             e.args = (msg, )
@@ -579,7 +585,8 @@ class MetaSimObject(type):
         # object is not an orphan and can provide better error
         # messages.
         child.set_parent(cls, name)
-        cls._children[name] = child
+        if not isNullPointer(child):
+            cls._children[name] = child
 
     def _new_port(cls, name, port):
         # each port should be uniquely assigned to one variable
@@ -606,19 +613,19 @@ class MetaSimObject(type):
             type.__setattr__(cls, attr, value)
             return
 
-        if cls.keywords.has_key(attr):
+        if attr in cls.keywords:
             cls._set_keyword(attr, value, cls.keywords[attr])
             return
 
-        if cls._ports.has_key(attr):
+        if attr in cls._ports:
             cls._cls_get_port_ref(attr).connect(value)
             return
 
         if isSimObjectOrSequence(value) and cls._instantiated:
-            raise RuntimeError, \
+            raise RuntimeError(
                   "cannot set SimObject parameter '%s' after\n" \
                   "    class %s has been instantiated or subclassed" \
-                  % (attr, cls.__name__)
+                  % (attr, cls.__name__))
 
         # check for param
         param = cls._params.get(attr)
@@ -632,8 +639,8 @@ class MetaSimObject(type):
             return
 
         # no valid assignment... raise exception
-        raise AttributeError, \
-              "Class %s has no parameter \'%s\'" % (cls.__name__, attr)
+        raise AttributeError(
+              "Class %s has no parameter \'%s\'" % (cls.__name__, attr))
 
     def __getattr__(cls, attr):
         if attr == 'cxx_class_path':
@@ -645,14 +652,14 @@ class MetaSimObject(type):
         if attr == 'cxx_namespaces':
             return cls.cxx_class_path[:-1]
 
-        if cls._values.has_key(attr):
+        if attr in cls._values:
             return cls._values[attr]
 
-        if cls._children.has_key(attr):
+        if attr in cls._children:
             return cls._children[attr]
 
-        raise AttributeError, \
-              "object '%s' has no attribute '%s'" % (cls.__name__, attr)
+        raise AttributeError(
+              "object '%s' has no attribute '%s'" % (cls.__name__, attr))
 
     def __str__(cls):
         return cls.__name__
@@ -674,7 +681,7 @@ class MetaSimObject(type):
         # the object itself, not including inherited params (which
         # will also be inherited from the base class's param struct
         # here). Sort the params based on their key
-        params = map(lambda (k, v): v, sorted(cls._params.local.items()))
+        params = map(lambda k_v: k_v[1], sorted(cls._params.local.items()))
         ports = cls._ports.local
 
         code('''#include "pybind11/pybind11.h"
@@ -728,8 +735,19 @@ module_init(py::module &m_internal)
         code()
         code.dedent()
 
-        bases = [ cls._base.cxx_class ] + cls.cxx_bases if cls._base else \
-                cls.cxx_bases
+        bases = []
+        if 'cxx_base' in cls._value_dict:
+            # If the c++ base class implied by python inheritance was
+            # overridden, use that value.
+            if cls.cxx_base:
+                bases.append(cls.cxx_base)
+        elif cls._base:
+            # If not and if there was a SimObject base, use its c++ class
+            # as this class' base.
+            bases.append(cls._base.cxx_class)
+        # Add in any extra bases that were requested.
+        bases.extend(cls.cxx_extra_bases)
+
         if bases:
             base_str = ", ".join(bases)
             code('py::class_<${{cls.cxx_class}}, ${base_str}, ' \
@@ -759,13 +777,13 @@ module_init(py::module &m_internal)
         # the object itself, not including inherited params (which
         # will also be inherited from the base class's param struct
         # here). Sort the params based on their key
-        params = map(lambda (k, v): v, sorted(cls._params.local.items()))
+        params = map(lambda k_v: k_v[1], sorted(cls._params.local.items()))
         ports = cls._ports.local
         try:
             ptypes = [p.ptype for p in params]
         except:
-            print cls, p, p.ptype_str
-            print params
+            print(cls, p, p.ptype_str)
+            print(params)
             raise
 
         class_path = cls._value_dict['cxx_class'].split('::')
@@ -857,7 +875,7 @@ def cxxMethod(*args, **kwargs):
     """Decorator to export C++ functions to Python"""
 
     def decorate(func):
-        name = func.func_name
+        name = func.__name__
         override = kwargs.get("override", False)
         cxx_name = kwargs.get("cxx_name", name)
 
@@ -880,7 +898,7 @@ def cxxMethod(*args, **kwargs):
 
         @wraps(func)
         def py_call(self, *args, **kwargs):
-            return self.func(*args, **kwargs)
+            return func(self, *args, **kwargs)
 
         f = py_call if override else cxx_call
         f.__pybind = PyBindMethod(name, cxx_name=cxx_name, args=args)
@@ -916,6 +934,63 @@ class ParamInfo(object):
     if not "created" in self.__dict__:
       self.__dict__[name] = value
 
+class SimObjectCliWrapperException(Exception):
+    def __init__(self, message):
+        super(Exception, self).__init__(message)
+
+class SimObjectCliWrapper(object):
+    """
+    Wrapper class to restrict operations that may be done
+    from the command line on SimObjects.
+
+    Only parameters may be set, and only children may be accessed.
+
+    Slicing allows for multiple simultaneous assignment of items in
+    one statement.
+    """
+
+    def __init__(self, sim_objects):
+        self.__dict__['_sim_objects'] = list(sim_objects)
+
+    def __getattr__(self, key):
+        return SimObjectCliWrapper(sim_object._children[key]
+                for sim_object in self._sim_objects)
+
+    def __setattr__(self, key, val):
+        for sim_object in self._sim_objects:
+            if key in sim_object._params:
+                if sim_object._params[key].isCmdLineSettable():
+                    setattr(sim_object, key, val)
+                else:
+                    raise SimObjectCliWrapperException(
+                            'tried to set or unsettable' \
+                            'object parameter: ' + key)
+            else:
+                raise SimObjectCliWrapperException(
+                            'tried to set or access non-existent' \
+                            'object parameter: ' + key)
+
+    def __getitem__(self, idx):
+        """
+        Extends the list() semantics to also allow tuples,
+        for example object[1, 3] selects items 1 and 3.
+        """
+        out = []
+        if isinstance(idx, tuple):
+            for t in idx:
+                out.extend(self[t]._sim_objects)
+        else:
+            if isinstance(idx, int):
+                _range = range(idx, idx + 1)
+            elif not isinstance(idx, slice):
+                raise SimObjectCliWrapperException( \
+                        'invalid index type: ' + repr(idx))
+            for sim_object in self._sim_objects:
+                if isinstance(idx, slice):
+                    _range = range(*idx.indices(len(sim_object)))
+                out.extend(sim_object[i] for i in _range)
+        return SimObjectCliWrapper(out)
+
 # The SimObject class is the root of the special hierarchy.  Most of
 # the code in this class deals with the configuration hierarchy itself
 # (parent/child node relationships).
@@ -927,7 +1002,7 @@ class SimObject(object):
     abstract = True
 
     cxx_header = "sim/sim_object.hh"
-    cxx_bases = [ "Drainable", "Serializable" ]
+    cxx_extra_bases = [ "Drainable", "Serializable" ]
     eventq_index = Param.UInt32(Parent.eventq_index, "Event Queue Index")
 
     cxx_exports = [
@@ -958,7 +1033,7 @@ class SimObject(object):
     def enumerateParams(self, flags_dict = {},
                         cmd_line_str = "", access_str = ""):
         if hasattr(self, "_paramEnumed"):
-            print "Cycle detected enumerating params"
+            print("Cycle detected enumerating params")
         else:
             self._paramEnumed = True
             # Scan the children first to pick up all the objects in this SimObj
@@ -1077,13 +1152,13 @@ class SimObject(object):
             # no memo_dict: must be top-level clone operation.
             # this is only allowed at the root of a hierarchy
             if self._parent:
-                raise RuntimeError, "attempt to clone object %s " \
+                raise RuntimeError("attempt to clone object %s " \
                       "not at the root of a tree (parent = %s)" \
-                      % (self, self._parent)
+                      % (self, self._parent))
             # create a new dict and use that.
             memo_dict = {}
             kwargs['_memo'] = memo_dict
-        elif memo_dict.has_key(self):
+        elif self in memo_dict:
             # clone already done & memoized
             return memo_dict[self]
         return self.__class__(_ancestor = self, **kwargs)
@@ -1099,13 +1174,13 @@ class SimObject(object):
         return ref
 
     def __getattr__(self, attr):
-        if self._ports.has_key(attr):
+        if attr in self._ports:
             return self._get_port_ref(attr)
 
-        if self._values.has_key(attr):
+        if attr in self._values:
             return self._values[attr]
 
-        if self._children.has_key(attr):
+        if attr in self._children:
             return self._children[attr]
 
         # If the attribute exists on the C++ object, transparently
@@ -1121,7 +1196,7 @@ class SimObject(object):
             err_string += "\n  (C++ object is not yet constructed," \
                           " so wrapped C++ methods are unavailable.)"
 
-        raise AttributeError, err_string
+        raise AttributeError(err_string)
 
     # Set attribute (called on foo.attr = value when foo is an
     # instance of class cls).
@@ -1131,7 +1206,7 @@ class SimObject(object):
             object.__setattr__(self, attr, value)
             return
 
-        if self._ports.has_key(attr):
+        if attr in self._ports:
             # set up port connection
             self._get_port_ref(attr).connect(value)
             return
@@ -1141,7 +1216,7 @@ class SimObject(object):
             try:
                 hr_value = value
                 value = param.convert(value)
-            except Exception, e:
+            except Exception as e:
                 msg = "%s\nError setting param %s.%s to %s\n" % \
                       (e, self.__class__.__name__, attr, value)
                 e.args = (msg, )
@@ -1165,8 +1240,8 @@ class SimObject(object):
             return
 
         # no valid assignment... raise exception
-        raise AttributeError, "Class %s has no parameter %s" \
-              % (self.__class__.__name__, attr)
+        raise AttributeError("Class %s has no parameter %s" \
+              % (self.__class__.__name__, attr))
 
 
     # this hack allows tacking a '[0]' onto parameters that may or may
@@ -1174,7 +1249,7 @@ class SimObject(object):
     def __getitem__(self, key):
         if key == 0:
             return self
-        raise IndexError, "Non-zero index '%s' to SimObject" % key
+        raise IndexError("Non-zero index '%s' to SimObject" % key)
 
     # this hack allows us to iterate over a SimObject that may
     # not be a vector, so we can call a loop over it and get just one
@@ -1219,14 +1294,15 @@ class SimObject(object):
         if child.has_parent():
             warn("add_child('%s'): child '%s' already has parent", name,
                 child.get_name())
-        if self._children.has_key(name):
+        if name in self._children:
             # This code path had an undiscovered bug that would make it fail
             # at runtime. It had been here for a long time and was only
             # exposed by a buggy script. Changes here will probably not be
             # exercised without specialized testing.
             self.clear_child(name)
         child.set_parent(self, name)
-        self._children[name] = child
+        if not isNullPointer(child):
+            self._children[name] = child
 
     # Take SimObject-valued parameters that haven't been explicitly
     # assigned as children and make them children of the object that
@@ -1276,18 +1352,18 @@ class SimObject(object):
 
             if isinstance(child, ptype) and not visited:
                 if found_obj != None and child != found_obj:
-                    raise AttributeError, \
+                    raise AttributeError(
                           'parent.any matched more than one: %s %s' % \
-                          (found_obj.path, child.path)
+                          (found_obj.path, child.path))
                 found_obj = child
         # search param space
         for pname,pdesc in self._params.iteritems():
             if issubclass(pdesc.ptype, ptype):
                 match_obj = self._values[pname]
                 if found_obj != None and found_obj != match_obj:
-                    raise AttributeError, \
+                    raise AttributeError(
                           'parent.any matched more than one: %s and %s' % \
-                          (found_obj.path, match_obj.path)
+                          (found_obj.path, match_obj.path))
                 found_obj = match_obj
         return found_obj, found_obj != None
 
@@ -1329,8 +1405,8 @@ class SimObject(object):
                 try:
                     value = value.unproxy(self)
                 except:
-                    print "Error in unproxying param '%s' of %s" % \
-                          (param, self.path())
+                    print("Error in unproxying param '%s' of %s" %
+                          (param, self.path()))
                     raise
                 setattr(self, param, value)
 
@@ -1344,30 +1420,31 @@ class SimObject(object):
                 port.unproxy(self)
 
     def print_ini(self, ini_file):
-        print >>ini_file, '[' + self.path() + ']'       # .ini section header
+        print('[' + self.path() + ']', file=ini_file)    # .ini section header
 
         instanceDict[self.path()] = self
 
         if hasattr(self, 'type'):
-            print >>ini_file, 'type=%s' % self.type
+            print('type=%s' % self.type, file=ini_file)
 
         if len(self._children.keys()):
-            print >>ini_file, 'children=%s' % \
-                  ' '.join(self._children[n].get_name() \
-                  for n in sorted(self._children.keys()))
+            print('children=%s' %
+                  ' '.join(self._children[n].get_name()
+                           for n in sorted(self._children.keys())),
+                  file=ini_file)
 
         for param in sorted(self._params.keys()):
             value = self._values.get(param)
             if value != None:
-                print >>ini_file, '%s=%s' % (param,
-                                             self._values[param].ini_str())
+                print('%s=%s' % (param, self._values[param].ini_str()),
+                      file=ini_file)
 
         for port_name in sorted(self._ports.keys()):
             port = self._port_refs.get(port_name, None)
             if port != None:
-                print >>ini_file, '%s=%s' % (port_name, port.ini_str())
+                print('%s=%s' % (port_name, port.ini_str()), file=ini_file)
 
-        print >>ini_file        # blank line between objects
+        print(file=ini_file)        # blank line between objects
 
     # generate a tree of dictionaries expressing all the parameters in the
     # instantiated system for use by scripts that want to do power, thermal
@@ -1456,7 +1533,7 @@ class SimObject(object):
         if not self._ccObject:
             # Make sure this object is in the configuration hierarchy
             if not self._parent and not isRoot(self):
-                raise RuntimeError, "Attempt to instantiate orphan node"
+                raise RuntimeError("Attempt to instantiate orphan node")
             # Cycles in the configuration hierarchy are not supported. This
             # will catch the resulting recursion and stop.
             self._ccObject = -1
@@ -1464,8 +1541,8 @@ class SimObject(object):
                 params = self.getCCParams()
                 self._ccObject = params.create()
         elif self._ccObject == -1:
-            raise RuntimeError, "%s: Cycle found in configuration hierarchy." \
-                  % self.path()
+            raise RuntimeError("%s: Cycle found in configuration hierarchy." \
+                  % self.path())
         return self._ccObject
 
     def descendants(self):
@@ -1492,6 +1569,42 @@ class SimObject(object):
         # order is the same on all hosts
         for (attr, portRef) in sorted(self._port_refs.iteritems()):
             portRef.ccConnect()
+
+    # Default function for generating the device structure.
+    # Can be overloaded by the inheriting class
+    def generateDeviceTree(self, state):
+        return # return without yielding anything
+        yield  # make this function a (null) generator
+
+    def recurseDeviceTree(self, state):
+        for child in self._children.itervalues():
+            for item in child: # For looping over SimObjectVectors
+                for dt in item.generateDeviceTree(state):
+                    yield dt
+
+    # On a separate method otherwise certain buggy Python versions
+    # would fail with: SyntaxError: unqualified exec is not allowed
+    # in function 'apply_config'
+    def _apply_config_get_dict(self):
+        return {
+            child_name: SimObjectCliWrapper(
+                iter(self._children[child_name]))
+            for child_name in self._children
+        }
+
+    def apply_config(self, params):
+        """
+        exec a list of Python code strings contained in params.
+
+        The only exposed globals to those strings are the child
+        SimObjects of this node.
+
+        This function is intended to allow users to modify SimObject
+        parameters from the command line with Python statements.
+        """
+        d = self._apply_config_get_dict()
+        for param in params:
+            exec(param, d)
 
 # Function to provide to C++ so it can look up instances based on paths
 def resolveSimObject(name):
@@ -1537,7 +1650,7 @@ def tryAsSimObjectOrVector(value):
 def coerceSimObjectOrVector(value):
     value = tryAsSimObjectOrVector(value)
     if value is None:
-        raise TypeError, "SimObject or SimObjectVector expected"
+        raise TypeError("SimObject or SimObjectVector expected")
     return value
 
 baseClasses = allClasses.copy()

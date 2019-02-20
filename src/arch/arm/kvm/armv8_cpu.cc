@@ -96,7 +96,6 @@ union KvmFPReg {
 };
 
 #define FP_REGS_PER_VFP_REG 4
-static_assert(sizeof(FloatRegBits) == 4, "Unexpected float reg size");
 
 const std::vector<ArmV8KvmCPU::IntRegInfo> ArmV8KvmCPU::intRegMap = {
     { INT_REG(regs.sp), INTREG_SP0, "SP(EL0)" },
@@ -253,14 +252,24 @@ ArmV8KvmCPU::updateKvmState()
         const RegIndex reg_base(i * FP_REGS_PER_VFP_REG);
         KvmFPReg reg;
         for (int j = 0; j < FP_REGS_PER_VFP_REG; j++)
-            reg.s[j].i = tc->readFloatRegBits(reg_base + j);
+            reg.s[j].i = tc->readFloatReg(reg_base + j);
 
         setOneReg(kvmFPReg(i), reg.data);
         DPRINTF(KvmContext, "  Q%i: %s\n", i, getAndFormatOneReg(kvmFPReg(i)));
     }
 
     for (const auto &ri : getSysRegMap()) {
-        const uint64_t value(tc->readMiscReg(ri.idx));
+        uint64_t value;
+        if (ri.is_device) {
+            // This system register is backed by a device. This means
+            // we need to lock the device event queue.
+            EventQueue::ScopedMigration migrate(deviceEventQueue());
+
+            value = tc->readMiscReg(ri.idx);
+        } else {
+            value = tc->readMiscReg(ri.idx);
+        }
+
         DPRINTF(KvmContext, "  %s := 0x%x\n", ri.name, value);
         setOneReg(ri.kvm, value);
     }
@@ -317,16 +326,21 @@ ArmV8KvmCPU::updateThreadContext()
         DPRINTF(KvmContext, "  Q%i: %s\n", i, getAndFormatOneReg(kvmFPReg(i)));
         getOneReg(kvmFPReg(i), reg.data);
         for (int j = 0; j < FP_REGS_PER_VFP_REG; j++)
-            tc->setFloatRegBits(reg_base + j, reg.s[j].i);
+            tc->setFloatReg(reg_base + j, reg.s[j].i);
     }
 
     for (const auto &ri : getSysRegMap()) {
         const auto value(getOneRegU64(ri.kvm));
         DPRINTF(KvmContext, "  %s := 0x%x\n", ri.name, value);
-        if (ri.is_device)
+        if (ri.is_device) {
+            // This system register is backed by a device. This means
+            // we need to lock the device event queue.
+            EventQueue::ScopedMigration migrate(deviceEventQueue());
+
             tc->setMiscReg(ri.idx, value);
-        else
+        } else {
             tc->setMiscRegNoEffect(ri.idx, value);
+        }
     }
 
     PCState pc(getOneRegU64(INT_REG(regs.pc)));

@@ -106,6 +106,14 @@ Pipeline::Pipeline(MinorCPU &cpu_, MinorCPUParams &params) :
 }
 
 void
+Pipeline::regStats()
+{
+    Ticked::regStats();
+
+    fetch2.regStats();
+}
+
+void
 Pipeline::minorTrace() const
 {
     fetch1.minorTrace();
@@ -191,6 +199,7 @@ void
 Pipeline::wakeupFetch(ThreadID tid)
 {
     fetch1.wakeupFetch(tid);
+    fetch2.dumpAllInput(tid);
 }
 
 bool

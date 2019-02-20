@@ -35,7 +35,7 @@
 #include <iostream>
 #include <sstream>
 
-#include "base/misc.hh"
+#include "base/logging.hh"
 #include "config/use_posix_clock.hh"
 #include "sim/core.hh"
 #include "sim/serialize.hh"
@@ -57,14 +57,17 @@ Time::_set(bool monotonic)
 void
 Time::setTick(Tick ticks)
 {
-    uint64_t nsecs = ticks / SimClock::Int::ns;
-    set(nsecs / NSEC_PER_SEC, nsecs % NSEC_PER_SEC);
+    uint64_t secs = ticks / SimClock::Frequency;
+    ticks -= secs * SimClock::Frequency;
+    uint64_t nsecs = static_cast<uint64_t>(ticks * SimClock::Float::GHz);
+    set(secs, nsecs);
 }
 
 Tick
 Time::getTick() const
 {
-    return (nsec() + sec() * NSEC_PER_SEC) * SimClock::Int::ns;
+    return sec() * SimClock::Frequency +
+        static_cast<uint64_t>(nsec() * SimClock::Float::ns);
 }
 
 string

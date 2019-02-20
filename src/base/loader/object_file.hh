@@ -35,7 +35,7 @@
 #include <limits>
 #include <string>
 
-#include "base/misc.hh"
+#include "base/logging.hh"
 #include "base/types.hh"
 
 class PortProxy;
@@ -57,7 +57,8 @@ class ObjectFile
         Arm,
         Thumb,
         Power,
-        Riscv
+        Riscv64,
+        Riscv32
     };
 
     enum OpSys {

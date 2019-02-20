@@ -24,6 +24,8 @@
 # (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+from __future__ import print_function
+
 import __builtin__
 import inspect
 import os
@@ -72,7 +74,7 @@ class lookup(object):
             return self.args[item]
         except ValueError:
             pass
-        raise IndexError, "Could not find '%s'" % item
+        raise IndexError("Could not find '%s'" % item)
 
 class code_formatter_meta(type):
     pattern = r"""
@@ -152,7 +154,7 @@ class code_formatter(object):
         self._data = []
 
     def write(self, *args):
-        f = file(os.path.join(*args), "w")
+        f = open(os.path.join(*args), "w")
         for data in self._data:
             f.write(data)
         f.close()
@@ -312,4 +314,4 @@ if __name__ == '__main__':
 }
 ''', 1, 9)
 
-    print f,
+    print(f, end=' ')

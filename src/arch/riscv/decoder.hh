@@ -36,7 +36,7 @@
 #include "arch/generic/decode_cache.hh"
 #include "arch/riscv/isa_traits.hh"
 #include "arch/riscv/types.hh"
-#include "base/misc.hh"
+#include "base/logging.hh"
 #include "base/types.hh"
 #include "cpu/static_inst.hh"
 #include "debug/Decode.hh"
@@ -48,7 +48,7 @@ class ISA;
 class Decoder
 {
   private:
-    DecodeCache::InstMap instMap;
+    DecodeCache::InstMap<ExtMachInst> instMap;
     bool aligned;
     bool mid;
     bool more;

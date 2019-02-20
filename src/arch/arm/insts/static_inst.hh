@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010-2013, 2016 ARM Limited
+ * Copyright (c) 2010-2013,2016-2018 ARM Limited
  * All rights reserved
  *
  * The license below extends only to copyright in the software and shall
@@ -48,6 +48,7 @@
 #include "arch/arm/utility.hh"
 #include "arch/arm/system.hh"
 #include "base/trace.hh"
+#include "cpu/exec_context.hh"
 #include "cpu/static_inst.hh"
 #include "sim/byteswap.hh"
 #include "sim/full_system.hh"
@@ -178,7 +179,7 @@ class ArmStaticInst : public StaticInst
     void printExtendOperand(bool firstOperand, std::ostream &os,
                             IntRegIndex rm, ArmExtendType type,
                             int64_t shiftAmt) const;
-
+    void printPFflags(std::ostream &os, int flag) const;
 
     void printDataInst(std::ostream &os, bool withImm) const;
     void printDataInst(std::ostream &os, bool withImm, bool immShift, bool s,
@@ -187,12 +188,13 @@ class ArmStaticInst : public StaticInst
                        uint64_t imm) const;
 
     void
-    advancePC(PCState &pcState) const
+    advancePC(PCState &pcState) const override
     {
         pcState.advance();
     }
 
-    std::string generateDisassembly(Addr pc, const SymbolTable *symtab) const;
+    std::string generateDisassembly(
+            Addr pc, const SymbolTable *symtab) const override;
 
     static inline uint32_t
     cpsrWriteByInstr(CPSR cpsr, uint32_t val, SCR scr, NSACR nsacr,
@@ -228,7 +230,7 @@ class ArmStaticInst : public StaticInst
                 // Now check the new mode is allowed
                 OperatingMode newMode = (OperatingMode) (val & mask(5));
                 OperatingMode oldMode = (OperatingMode)(uint32_t)cpsr.mode;
-                if (!badMode(newMode)) {
+                if (!badMode(tc, newMode)) {
                     bool validModeChange = true;
                     // Check for attempts to enter modes only permitted in
                     // Secure state from Non-secure state. These are Monitor
@@ -290,16 +292,14 @@ class ArmStaticInst : public StaticInst
         return ((spsr & ~bitMask) | (val & bitMask));
     }
 
-    template<class XC>
     static inline Addr
-    readPC(XC *xc)
+    readPC(ExecContext *xc)
     {
         return xc->pcState().instPC();
     }
 
-    template<class XC>
     static inline void
-    setNextPC(XC *xc, Addr val)
+    setNextPC(ExecContext *xc, Addr val)
     {
         PCState pc = xc->pcState();
         pc.instNPC(val);
@@ -340,9 +340,8 @@ class ArmStaticInst : public StaticInst
     }
 
     // Perform an interworking branch.
-    template<class XC>
     static inline void
-    setIWNextPC(XC *xc, Addr val)
+    setIWNextPC(ExecContext *xc, Addr val)
     {
         PCState pc = xc->pcState();
         pc.instIWNPC(val);
@@ -351,9 +350,8 @@ class ArmStaticInst : public StaticInst
 
     // Perform an interworking branch in ARM mode, a regular branch
     // otherwise.
-    template<class XC>
     static inline void
-    setAIWNextPC(XC *xc, Addr val)
+    setAIWNextPC(ExecContext *xc, Addr val)
     {
         PCState pc = xc->pcState();
         pc.instAIWNPC(val);
@@ -366,6 +364,19 @@ class ArmStaticInst : public StaticInst
         return std::make_shared<UndefinedInstruction>(machInst, false,
                                                       mnemonic, true);
     }
+
+    // Utility function used by checkForWFxTrap32 and checkForWFxTrap64
+    // Returns true if processor has to trap a WFI/WFE instruction.
+    bool isWFxTrapping(ThreadContext *tc,
+                       ExceptionLevel targetEL, bool isWfe) const;
+
+    /**
+     * Trigger a Software Breakpoint.
+     *
+     * See aarch32/exceptions/debug/AArch32.SoftwareBreakpoint in the
+     * ARM ARM psueodcode library.
+     */
+    Fault softwareBreakpoint32(ExecContext *xc, uint16_t imm) const;
 
     /**
      * Trap an access to Advanced SIMD or FP registers due to access
@@ -409,17 +420,106 @@ class ArmStaticInst : public StaticInst
                                     bool fpexc_check, bool advsimd) const;
 
     /**
+     * Check if WFE/WFI instruction execution in aarch32 should be trapped.
+     *
+     * See aarch32/exceptions/traps/AArch32.checkForWFxTrap in the
+     * ARM ARM psueodcode library.
+     */
+    Fault checkForWFxTrap32(ThreadContext *tc,
+                            ExceptionLevel tgtEl, bool isWfe) const;
+
+    /**
+     * Check if WFE/WFI instruction execution in aarch64 should be trapped.
+     *
+     * See aarch64/exceptions/traps/AArch64.checkForWFxTrap in the
+     * ARM ARM psueodcode library.
+     */
+    Fault checkForWFxTrap64(ThreadContext *tc,
+                            ExceptionLevel tgtEl, bool isWfe) const;
+
+    /**
+     * WFE/WFI trapping helper function.
+     */
+    Fault trapWFx(ThreadContext *tc, CPSR cpsr, SCR scr, bool isWfe) const;
+
+    /**
+     * Check if SETEND instruction execution in aarch32 should be trapped.
+     *
+     * See aarch32/exceptions/traps/AArch32.CheckSETENDEnabled in the
+     * ARM ARM pseudocode library.
+     */
+    Fault checkSETENDEnabled(ThreadContext *tc, CPSR cpsr) const;
+
+    /**
+     * UNDEFINED behaviour in AArch32
+     *
+     * See aarch32/exceptions/traps/AArch32.UndefinedFault in the
+     * ARM ARM pseudocode library.
+     */
+    Fault undefinedFault32(ThreadContext *tc, ExceptionLevel el) const;
+
+    /**
+     * UNDEFINED behaviour in AArch64
+     *
+     * See aarch64/exceptions/traps/AArch64.UndefinedFault in the
+     * ARM ARM pseudocode library.
+     */
+    Fault undefinedFault64(ThreadContext *tc, ExceptionLevel el) const;
+
+    /**
      * Get the new PSTATE from a SPSR register in preparation for an
      * exception return.
      *
      * See shared/functions/system/SetPSTATEFromPSR in the ARM ARM
-     * psueodcode library.
+     * pseudocode library.
      */
     CPSR getPSTATEFromPSR(ThreadContext *tc, CPSR cpsr, CPSR spsr) const;
+
+    /**
+     * Return true if exceptions normally routed to EL1 are being handled
+     * at an Exception level using AArch64, because either EL1 is using
+     * AArch64 or TGE is in force and EL2 is using AArch64.
+     *
+     * See aarch32/exceptions/exceptions/AArch32.GeneralExceptionsToAArch64
+     * in the ARM ARM pseudocode library.
+     */
+    bool generalExceptionsToAArch64(ThreadContext *tc,
+                                    ExceptionLevel pstateEL) const;
 
   public:
     virtual void
     annotateFault(ArmFault *fault) {}
+
+    uint8_t
+    getIntWidth() const
+    {
+        return intWidth;
+    }
+
+    /** Returns the byte size of current instruction */
+    ssize_t
+    instSize() const
+    {
+        return (!machInst.thumb || machInst.bigThumb) ? 4 : 2;
+    }
+
+    /**
+     * Returns the real encoding of the instruction:
+     * the machInst field is in fact always 64 bit wide and
+     * contains some instruction metadata, which means it differs
+     * from the real opcode.
+     */
+    MachInst
+    encoding() const
+    {
+        return static_cast<MachInst>(machInst & (mask(instSize() * 8)));
+    }
+
+    size_t
+    asBytes(void *buf, size_t max_size) override
+    {
+        return simpleAsBytes(buf, max_size, machInst);
+    }
 };
 }
 

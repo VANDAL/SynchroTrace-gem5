@@ -1,6 +1,6 @@
 // -*- mode:c++ -*-
 
-// Copyright (c) 2010, 2012 ARM Limited
+// Copyright (c) 2010, 2012, 2017 ARM Limited
 // All rights reserved
 //
 // The license below extends only to copyright in the software and shall
@@ -51,6 +51,7 @@ output header {{
 
 #include "arch/arm/insts/branch.hh"
 #include "arch/arm/insts/branch64.hh"
+#include "arch/arm/insts/crypto.hh"
 #include "arch/arm/insts/data64.hh"
 #include "arch/arm/insts/fplib.hh"
 #include "arch/arm/insts/macromem.hh"
@@ -72,6 +73,9 @@ output header {{
 
 output decoder {{
 #include <string>
+
+#include <gem5/asm/generic/m5ops.h>
+
 #include "arch/arm/decoder.hh"
 #include "arch/arm/faults.hh"
 #include "arch/arm/intregs.hh"
@@ -92,6 +96,7 @@ output exec {{
 #include "arch/arm/utility.hh"
 #include "arch/generic/memhelpers.hh"
 #include "base/condcodes.hh"
+#include "base/crc.hh"
 #include "cpu/base.hh"
 #include "sim/pseudo_inst.hh"
 #if defined(linux)

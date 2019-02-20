@@ -165,6 +165,19 @@ class Fetch2 : public Named
     std::vector<Fetch2ThreadInfo> fetchInfo;
     ThreadID threadPriority;
 
+    /** Stats */
+    Stats::Scalar intInstructions;
+    Stats::Scalar fpInstructions;
+    Stats::Scalar vecInstructions;
+    Stats::Scalar loadInstructions;
+    Stats::Scalar storeInstructions;
+    Stats::Scalar amoInstructions;
+
+  public:
+    /** Dump the whole contents of the input buffer.  Useful after a
+     *  prediction changes control flow */
+    void dumpAllInput(ThreadID tid);
+
   protected:
     /** Get a piece of data to work on from the inputBuffer, or 0 if there
      *  is no data. */
@@ -172,10 +185,6 @@ class Fetch2 : public Named
 
     /** Pop an element off the input buffer, if there are any */
     void popInput(ThreadID tid);
-
-    /** Dump the whole contents of the input buffer.  Useful after a
-     *  prediction changes control flow */
-    void dumpAllInput(ThreadID tid);
 
     /** Update local branch prediction structures from feedback from
      *  Execute. */
@@ -205,6 +214,8 @@ class Fetch2 : public Named
     void evaluate();
 
     void minorTrace() const;
+
+    void regStats();
 
     /** Is this stage drained?  For Fetch2, draining is initiated by
      *  Execute halting Fetch1 causing Fetch2 to naturally drain.

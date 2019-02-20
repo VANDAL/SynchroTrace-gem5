@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013-2014 ARM Limited
+ * Copyright (c) 2013-2014,2016 ARM Limited
  * All rights reserved
  *
  * The license below extends only to copyright in the software and shall
@@ -120,6 +120,7 @@ Fetch2::dumpAllInput(ThreadID tid)
         popInput(tid);
 
     fetchInfo[tid].inputIndex = 0;
+    fetchInfo[tid].havePC = false;
 }
 
 void
@@ -415,6 +416,19 @@ Fetch2::evaluate()
                     dyn_inst->pc = fetch_info.pc;
                     DPRINTF(Fetch, "decoder inst %s\n", *dyn_inst);
 
+                    // Collect some basic inst class stats
+                    if (decoded_inst->isLoad())
+                        loadInstructions++;
+                    else if (decoded_inst->isStore())
+                        storeInstructions++;
+                    else if (decoded_inst->isAtomic())
+                        amoInstructions++;
+                    else if (decoded_inst->isVector())
+                        vecInstructions++;
+                    else if (decoded_inst->isFloating())
+                        fpInstructions++;
+                    else if (decoded_inst->isInteger())
+                        intInstructions++;
 
                     DPRINTF(Fetch, "Instruction extracted from line %s"
                         " lineWidth: %d output_index: %d inputIndex: %d"
@@ -572,7 +586,9 @@ Fetch2::getScheduledThread()
     }
 
     for (auto tid : priority_list) {
-        if (getInput(tid) && !fetchInfo[tid].blocked) {
+        if (cpu.getContext(tid)->status() == ThreadContext::Active &&
+            getInput(tid) &&
+            !fetchInfo[tid].blocked) {
             threadPriority = tid;
             return tid;
         }
@@ -591,6 +607,42 @@ Fetch2::isDrained()
 
     return (*inp.outputWire).isBubble() &&
            (*predictionOut.inputWire).isBubble();
+}
+
+void
+Fetch2::regStats()
+{
+    using namespace Stats;
+
+    intInstructions
+        .name(name() + ".int_instructions")
+        .desc("Number of integer instructions successfully decoded")
+        .flags(total);
+
+    fpInstructions
+        .name(name() + ".fp_instructions")
+        .desc("Number of floating point instructions successfully decoded")
+        .flags(total);
+
+    vecInstructions
+        .name(name() + ".vec_instructions")
+        .desc("Number of SIMD instructions successfully decoded")
+        .flags(total);
+
+    loadInstructions
+        .name(name() + ".load_instructions")
+        .desc("Number of memory load instructions successfully decoded")
+        .flags(total);
+
+    storeInstructions
+        .name(name() + ".store_instructions")
+        .desc("Number of memory store instructions successfully decoded")
+        .flags(total);
+
+    amoInstructions
+        .name(name() + ".amo_instructions")
+        .desc("Number of memory atomic instructions successfully decoded")
+        .flags(total);
 }
 
 void

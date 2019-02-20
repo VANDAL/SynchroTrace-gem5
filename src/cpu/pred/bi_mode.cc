@@ -68,8 +68,8 @@ BiModeBP::BiModeBP(const BiModeBPParams *params)
     globalHistoryMask = globalPredictorSize - 1;
 
     choiceThreshold = (ULL(1) << (choiceCtrBits - 1)) - 1;
-    takenThreshold = (ULL(1) << (choiceCtrBits - 1)) - 1;
-    notTakenThreshold = (ULL(1) << (choiceCtrBits - 1)) - 1;
+    takenThreshold = (ULL(1) << (globalCtrBits - 1)) - 1;
+    notTakenThreshold = (ULL(1) << (globalCtrBits - 1)) - 1;
 }
 
 /*
@@ -161,7 +161,7 @@ BiModeBP::btbUpdate(ThreadID tid, Addr branchAddr, void * &bpHistory)
  */
 void
 BiModeBP::update(ThreadID tid, Addr branchAddr, bool taken, void *bpHistory,
-                 bool squashed)
+                 bool squashed, const StaticInstPtr & inst, Addr corrTarget)
 {
     assert(bpHistory);
 
@@ -227,12 +227,6 @@ BiModeBP::update(ThreadID tid, Addr branchAddr, bool taken, void *bpHistory,
     }
 
     delete history;
-}
-
-unsigned
-BiModeBP::getGHR(ThreadID tid, void *bp_history) const
-{
-    return static_cast<BPHistory*>(bp_history)->globalHistoryReg;
 }
 
 void

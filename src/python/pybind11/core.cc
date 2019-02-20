@@ -52,7 +52,7 @@
 
 #include "base/addr_range.hh"
 #include "base/inet.hh"
-#include "base/misc.hh"
+#include "base/logging.hh"
 #include "base/random.hh"
 #include "base/socket.hh"
 #include "base/types.hh"
@@ -245,7 +245,11 @@ pybind_init_core(py::module &m_native)
         .def("seedRandom", [](uint64_t seed) { random_mt.init(seed); })
 
 
+        .def("fixClockFrequency", &fixClockFrequency)
+        .def("clockFrequencyFixed", &clockFrequencyFixed)
+
         .def("setClockFrequency", &setClockFrequency)
+        .def("getClockFrequency", &getClockFrequency)
         .def("curTick", curTick)
         ;
 

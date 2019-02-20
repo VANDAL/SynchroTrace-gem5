@@ -101,14 +101,12 @@
 using namespace std;
 using namespace TheISA;
 
-Process::Process(ProcessParams * params, ObjectFile * obj_file)
+Process::Process(ProcessParams *params, EmulationPageTable *pTable,
+                 ObjectFile *obj_file)
     : SimObject(params), system(params->system),
       useArchPT(params->useArchPT),
       kvmInSE(params->kvmInSE),
-      pTable(useArchPT ?
-        static_cast<PageTableBase *>(new ArchPageTable(name(), params->pid,
-            system)) :
-        static_cast<PageTableBase *>(new FuncPageTable(name(), params->pid))),
+      pTable(pTable),
       initVirtMem(system->getSystemPort(), this,
                   SETranslatingPortProxy::Always),
       objFile(obj_file),
@@ -158,7 +156,7 @@ Process::Process(ProcessParams * params, ObjectFile * obj_file)
 
 void
 Process::clone(ThreadContext *otc, ThreadContext *ntc,
-               Process *np, TheISA::IntReg flags)
+               Process *np, RegVal flags)
 {
 #ifndef CLONE_VM
 #define CLONE_VM 0
@@ -312,7 +310,8 @@ Process::allocateMem(Addr vaddr, int64_t size, bool clobber)
     int npages = divCeil(size, (int64_t)PageBytes);
     Addr paddr = system->allocPhysPages(npages);
     pTable->map(vaddr, paddr, size,
-                clobber ? PageTableBase::Clobber : PageTableBase::Zero);
+                clobber ? EmulationPageTable::Clobber :
+                          EmulationPageTable::MappingFlags(0));
 }
 
 void
@@ -367,6 +366,7 @@ Process::fixupStackFault(Addr vaddr)
 void
 Process::serialize(CheckpointOut &cp) const
 {
+    memState->serialize(cp);
     pTable->serialize(cp);
     /**
      * Checkpoints for file descriptors currently do not work. Need to
@@ -384,6 +384,7 @@ Process::serialize(CheckpointOut &cp) const
 void
 Process::unserialize(CheckpointIn &cp)
 {
+    memState->unserialize(cp);
     pTable->unserialize(cp);
     /**
      * Checkpoints for file descriptors currently do not work. Need to
@@ -405,7 +406,8 @@ bool
 Process::map(Addr vaddr, Addr paddr, int size, bool cacheable)
 {
     pTable->map(vaddr, paddr, size,
-                cacheable ? PageTableBase::Zero : PageTableBase::Uncacheable);
+                cacheable ? EmulationPageTable::MappingFlags(0) :
+                            EmulationPageTable::Uncacheable);
     return true;
 }
 
@@ -421,7 +423,7 @@ Process::syscall(int64_t callnum, ThreadContext *tc, Fault *fault)
     desc->doSyscall(callnum, this, tc, fault);
 }
 
-IntReg
+RegVal
 Process::getSyscallArg(ThreadContext *tc, int &i, int width)
 {
     return getSyscallArg(tc, i);
@@ -621,14 +623,19 @@ ProcessParams::create()
         fatal("Unknown/unsupported operating system.");
     }
 #elif THE_ISA == RISCV_ISA
-    if (obj_file->getArch() != ObjectFile::Riscv)
+    ObjectFile::Arch arch = obj_file->getArch();
+    if (arch != ObjectFile::Riscv64 && arch != ObjectFile::Riscv32)
         fatal("Object file architecture does not match compiled ISA (RISCV).");
     switch (obj_file->getOpSys()) {
       case ObjectFile::UnknownOpSys:
         warn("Unknown operating system; assuming Linux.");
         // fall through
       case ObjectFile::Linux:
-        process = new RiscvLinuxProcess(this, obj_file);
+        if (arch == ObjectFile::Riscv64) {
+            process = new RiscvLinuxProcess64(this, obj_file);
+        } else {
+            process = new RiscvLinuxProcess32(this, obj_file);
+        }
         break;
       default:
         fatal("Unknown/unsupported operating system.");

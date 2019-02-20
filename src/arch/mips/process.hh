@@ -51,15 +51,11 @@ class MipsProcess : public Process
     void argsInit(int pageSize);
 
   public:
-    MipsISA::IntReg getSyscallArg(ThreadContext *tc, int &i);
+    RegVal getSyscallArg(ThreadContext *tc, int &i);
     /// Explicitly import the otherwise hidden getSyscallArg
     using Process::getSyscallArg;
-    void setSyscallArg(ThreadContext *tc, int i, MipsISA::IntReg val);
+    void setSyscallArg(ThreadContext *tc, int i, RegVal val);
     void setSyscallReturn(ThreadContext *tc, SyscallReturn return_value);
 };
-
-/* No architectural page table defined for this ISA */
-typedef NoArchPageTable ArchPageTable;
-
 
 #endif // __MIPS_PROCESS_HH__

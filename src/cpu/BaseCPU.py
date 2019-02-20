@@ -1,4 +1,4 @@
-# Copyright (c) 2012-2013, 2015 ARM Limited
+# Copyright (c) 2012-2013, 2015-2017 ARM Limited
 # All rights reserved.
 #
 # The license below extends only to copyright in the software and shall
@@ -40,6 +40,9 @@
 # Authors: Nathan Binkert
 #          Rick Strong
 #          Andreas Hansson
+#          Glenn Bergmans
+
+from __future__ import print_function
 
 import sys
 
@@ -47,50 +50,54 @@ from m5.SimObject import *
 from m5.defines import buildEnv
 from m5.params import *
 from m5.proxy import *
+from m5.util.fdthelper import *
 
-from XBar import L2XBar
-from InstTracer import InstTracer
-from CPUTracers import ExeTracer
-from MemObject import MemObject
-from ClockDomain import *
+from m5.objects.XBar import L2XBar
+from m5.objects.InstTracer import InstTracer
+from m5.objects.CPUTracers import ExeTracer
+from m5.objects.MemObject import MemObject
+from m5.objects.SubSystem import SubSystem
+from m5.objects.ClockDomain import *
+from m5.objects.Platform import Platform
 
 default_tracer = ExeTracer()
 
 if buildEnv['TARGET_ISA'] == 'alpha':
-    from AlphaTLB import AlphaDTB, AlphaITB
-    from AlphaInterrupts import AlphaInterrupts
-    from AlphaISA import AlphaISA
-    isa_class = AlphaISA
+    from m5.objects.AlphaTLB import AlphaDTB as ArchDTB, AlphaITB as ArchITB
+    from m5.objects.AlphaInterrupts import AlphaInterrupts
+    from m5.objects.AlphaISA import AlphaISA
+    default_isa_class = AlphaISA
 elif buildEnv['TARGET_ISA'] == 'sparc':
-    from SparcTLB import SparcTLB
-    from SparcInterrupts import SparcInterrupts
-    from SparcISA import SparcISA
-    isa_class = SparcISA
+    from m5.objects.SparcTLB import SparcTLB as ArchDTB, SparcTLB as ArchITB
+    from m5.objects.SparcInterrupts import SparcInterrupts
+    from m5.objects.SparcISA import SparcISA
+    default_isa_class = SparcISA
 elif buildEnv['TARGET_ISA'] == 'x86':
-    from X86TLB import X86TLB
-    from X86LocalApic import X86LocalApic
-    from X86ISA import X86ISA
-    isa_class = X86ISA
+    from m5.objects.X86TLB import X86TLB as ArchDTB, X86TLB as ArchITB
+    from m5.objects.X86LocalApic import X86LocalApic
+    from m5.objects.X86ISA import X86ISA
+    default_isa_class = X86ISA
 elif buildEnv['TARGET_ISA'] == 'mips':
-    from MipsTLB import MipsTLB
-    from MipsInterrupts import MipsInterrupts
-    from MipsISA import MipsISA
-    isa_class = MipsISA
+    from m5.objects.MipsTLB import MipsTLB as ArchDTB, MipsTLB as ArchITB
+    from m5.objects.MipsInterrupts import MipsInterrupts
+    from m5.objects.MipsISA import MipsISA
+    default_isa_class = MipsISA
 elif buildEnv['TARGET_ISA'] == 'arm':
-    from ArmTLB import ArmTLB, ArmStage2IMMU, ArmStage2DMMU
-    from ArmInterrupts import ArmInterrupts
-    from ArmISA import ArmISA
-    isa_class = ArmISA
+    from m5.objects.ArmTLB import ArmTLB as ArchDTB, ArmTLB as ArchITB
+    from m5.objects.ArmTLB import ArmStage2IMMU, ArmStage2DMMU
+    from m5.objects.ArmInterrupts import ArmInterrupts
+    from m5.objects.ArmISA import ArmISA
+    default_isa_class = ArmISA
 elif buildEnv['TARGET_ISA'] == 'power':
-    from PowerTLB import PowerTLB
-    from PowerInterrupts import PowerInterrupts
-    from PowerISA import PowerISA
-    isa_class = PowerISA
+    from m5.objects.PowerTLB import PowerTLB as ArchDTB, PowerTLB as ArchITB
+    from m5.objects.PowerInterrupts import PowerInterrupts
+    from m5.objects.PowerISA import PowerISA
+    default_isa_class = PowerISA
 elif buildEnv['TARGET_ISA'] == 'riscv':
-    from RiscvTLB import RiscvTLB
-    from RiscvInterrupts import RiscvInterrupts
-    from RiscvISA import RiscvISA
-    isa_class = RiscvISA
+    from m5.objects.RiscvTLB import RiscvTLB as ArchDTB, RiscvTLB as ArchITB
+    from m5.objects.RiscvInterrupts import RiscvInterrupts
+    from m5.objects.RiscvISA import RiscvISA
+    default_isa_class = RiscvISA
 
 class BaseCPU(MemObject):
     type = 'BaseCPU'
@@ -135,6 +142,12 @@ class BaseCPU(MemObject):
     cpu_id = Param.Int(-1, "CPU identifier")
     socket_id = Param.Unsigned(0, "Physical Socket identifier")
     numThreads = Param.Unsigned(1, "number of HW thread contexts")
+    pwr_gating_latency = Param.Cycles(300,
+        "Latency to enter power gating state when all contexts are suspended")
+
+    power_gating_on_idle = Param.Bool(False, "Control whether the core goes "\
+        "to the OFF power state after all thread are disabled for "\
+        "pwr_gating_latency cycles")
 
     function_trace = Param.Bool(False, "Enable function trace")
     function_trace_start = Param.Tick(0, "Tick to start function trace")
@@ -156,53 +169,41 @@ class BaseCPU(MemObject):
 
     workload = VectorParam.Process([], "processes to run")
 
+    dtb = Param.BaseTLB(ArchDTB(), "Data TLB")
+    itb = Param.BaseTLB(ArchITB(), "Instruction TLB")
     if buildEnv['TARGET_ISA'] == 'sparc':
-        dtb = Param.SparcTLB(SparcTLB(), "Data TLB")
-        itb = Param.SparcTLB(SparcTLB(), "Instruction TLB")
         interrupts = VectorParam.SparcInterrupts(
                 [], "Interrupt Controller")
-        isa = VectorParam.SparcISA([ isa_class() ], "ISA instance")
+        isa = VectorParam.SparcISA([], "ISA instance")
     elif buildEnv['TARGET_ISA'] == 'alpha':
-        dtb = Param.AlphaTLB(AlphaDTB(), "Data TLB")
-        itb = Param.AlphaTLB(AlphaITB(), "Instruction TLB")
         interrupts = VectorParam.AlphaInterrupts(
                 [], "Interrupt Controller")
-        isa = VectorParam.AlphaISA([ isa_class() ], "ISA instance")
+        isa = VectorParam.AlphaISA([], "ISA instance")
     elif buildEnv['TARGET_ISA'] == 'x86':
-        dtb = Param.X86TLB(X86TLB(), "Data TLB")
-        itb = Param.X86TLB(X86TLB(), "Instruction TLB")
         interrupts = VectorParam.X86LocalApic([], "Interrupt Controller")
-        isa = VectorParam.X86ISA([ isa_class() ], "ISA instance")
+        isa = VectorParam.X86ISA([], "ISA instance")
     elif buildEnv['TARGET_ISA'] == 'mips':
-        dtb = Param.MipsTLB(MipsTLB(), "Data TLB")
-        itb = Param.MipsTLB(MipsTLB(), "Instruction TLB")
         interrupts = VectorParam.MipsInterrupts(
                 [], "Interrupt Controller")
-        isa = VectorParam.MipsISA([ isa_class() ], "ISA instance")
+        isa = VectorParam.MipsISA([], "ISA instance")
     elif buildEnv['TARGET_ISA'] == 'arm':
-        dtb = Param.ArmTLB(ArmTLB(), "Data TLB")
-        itb = Param.ArmTLB(ArmTLB(), "Instruction TLB")
         istage2_mmu = Param.ArmStage2MMU(ArmStage2IMMU(), "Stage 2 trans")
         dstage2_mmu = Param.ArmStage2MMU(ArmStage2DMMU(), "Stage 2 trans")
         interrupts = VectorParam.ArmInterrupts(
                 [], "Interrupt Controller")
-        isa = VectorParam.ArmISA([ isa_class() ], "ISA instance")
+        isa = VectorParam.ArmISA([], "ISA instance")
     elif buildEnv['TARGET_ISA'] == 'power':
         UnifiedTLB = Param.Bool(True, "Is this a Unified TLB?")
-        dtb = Param.PowerTLB(PowerTLB(), "Data TLB")
-        itb = Param.PowerTLB(PowerTLB(), "Instruction TLB")
         interrupts = VectorParam.PowerInterrupts(
                 [], "Interrupt Controller")
-        isa = VectorParam.PowerISA([ isa_class() ], "ISA instance")
+        isa = VectorParam.PowerISA([], "ISA instance")
     elif buildEnv['TARGET_ISA'] == 'riscv':
-        dtb = Param.RiscvTLB(RiscvTLB(), "Data TLB")
-        itb = Param.RiscvTLB(RiscvTLB(), "Instruction TLB")
         interrupts = VectorParam.RiscvInterrupts(
                 [], "Interrupt Controller")
-        isa = VectorParam.RiscvISA([ isa_class() ], "ISA instance")
+        isa = VectorParam.RiscvISA([], "ISA instance")
     else:
-        print "Don't know what TLB to use for ISA %s" % \
-            buildEnv['TARGET_ISA']
+        print("Don't know what TLB to use for ISA %s" %
+              buildEnv['TARGET_ISA'])
         sys.exit(1)
 
     max_insts_all_threads = Param.Counter(0,
@@ -261,8 +262,8 @@ class BaseCPU(MemObject):
             self.interrupts = \
                 [RiscvInterrupts() for i in xrange(self.numThreads)]
         else:
-            print "Don't know what Interrupt Controller to use for ISA %s" % \
-                buildEnv['TARGET_ISA']
+            print("Don't know what Interrupt Controller to use for ISA %s" %
+                  buildEnv['TARGET_ISA'])
             sys.exit(1)
 
     def connectCachedPorts(self, bus):
@@ -304,18 +305,72 @@ class BaseCPU(MemObject):
                 self._cached_ports += ["checker.itb.walker.port", \
                                        "checker.dtb.walker.port"]
 
-    def addTwoLevelCacheHierarchy(self, ic, dc, l2c, iwc = None, dwc = None):
+    def addTwoLevelCacheHierarchy(self, ic, dc, l2c, iwc=None, dwc=None,
+                                  xbar=None):
         self.addPrivateSplitL1Caches(ic, dc, iwc, dwc)
-        self.toL2Bus = L2XBar()
+        self.toL2Bus = xbar if xbar else L2XBar()
         self.connectCachedPorts(self.toL2Bus)
         self.l2cache = l2c
         self.toL2Bus.master = self.l2cache.cpu_side
         self._cached_ports = ['l2cache.mem_side']
 
     def createThreads(self):
-        self.isa = [ isa_class() for i in xrange(self.numThreads) ]
+        # If no ISAs have been created, assume that the user wants the
+        # default ISA.
+        if len(self.isa) == 0:
+            self.isa = [ default_isa_class() for i in xrange(self.numThreads) ]
+        else:
+            if len(self.isa) != int(self.numThreads):
+                raise RuntimeError("Number of ISA instances doesn't "
+                                   "match thread count")
         if self.checker != NULL:
             self.checker.createThreads()
 
     def addCheckerCpu(self):
         pass
+
+    def createPhandleKey(self, thread):
+        # This method creates a unique key for this cpu as a function of a
+        # certain thread
+        return 'CPU-%d-%d-%d' % (self.socket_id, self.cpu_id, thread)
+
+    #Generate simple CPU Device Tree structure
+    def generateDeviceTree(self, state):
+        """Generate cpu nodes for each thread and the corresponding part of the
+        cpu-map node. Note that this implementation does not support clusters
+        of clusters. Note that GEM5 is not compatible with the official way of
+        numbering cores as defined in the Device Tree documentation. Where the
+        cpu_id needs to reset to 0 for each cluster by specification, GEM5
+        expects the cpu_id to be globally unique and incremental. This
+        generated node adheres the GEM5 way of doing things."""
+        if bool(self.switched_out):
+            return
+
+        cpus_node = FdtNode('cpus')
+        cpus_node.append(state.CPUCellsProperty())
+        #Special size override of 0
+        cpus_node.append(FdtPropertyWords('#size-cells', [0]))
+
+        # Generate cpu nodes
+        for i in range(int(self.numThreads)):
+            reg = (int(self.socket_id)<<8) + int(self.cpu_id) + i
+            node = FdtNode("cpu@%x" % reg)
+            node.append(FdtPropertyStrings("device_type", "cpu"))
+            node.appendCompatible(["gem5,arm-cpu"])
+            node.append(FdtPropertyWords("reg", state.CPUAddrCells(reg)))
+            platform, found = self.system.unproxy(self).find_any(Platform)
+            if found:
+                platform.annotateCpuDeviceNode(node, state)
+            else:
+                warn("Platform not found for device tree generation; " \
+                     "system or multiple CPUs may not start")
+
+            freq = round(self.clk_domain.unproxy(self).clock[0].frequency)
+            node.append(FdtPropertyWords("clock-frequency", freq))
+
+            # Unique key for this CPU
+            phandle_key = self.createPhandleKey(i)
+            node.appendPhandle(phandle_key)
+            cpus_node.append(node)
+
+        yield cpus_node
