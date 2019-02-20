@@ -71,7 +71,6 @@
 #include <vector>
 
 #include "base/intmath.hh"
-#include "base/misc.hh"
 #include "cpu/testers/synchrotrace/st_event.hh"
 #include "cpu/testers/synchrotrace/st_parser.hh"
 #include "debug/ROI.hh"

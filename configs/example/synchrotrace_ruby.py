@@ -121,8 +121,8 @@ Ruby.define_options(parser)
 (options, args) = parser.parse_args()
 
 if args:
-     print "Error: script doesn't take any positional arguments"
-     sys.exit(1)
+    print("Error: script doesn't take any positional arguments")
+    sys.exit(1)
 
 # Create the SynchroTrace replay mechanism
 tester = SynchroTrace(num_cpus = options.num_cpus,
@@ -188,4 +188,4 @@ m5.instantiate()
 # simulate until program terminates
 exit_event = m5.simulate(options.abs_max_tick)
 
-print 'Exiting @ tick', m5.curTick(), 'because', exit_event.getCause()
+print('Exiting @ tick', m5.curTick(), 'because', exit_event.getCause())

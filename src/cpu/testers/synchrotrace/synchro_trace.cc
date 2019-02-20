@@ -64,7 +64,7 @@ using namespace std;
 
 SynchroTrace::SynchroTrace(const Params *p)
   : MemObject(p), synchroTraceStartEvent(this),
-    masterID(p->system->getMasterId(name())),
+    masterID(p->system->getMasterId(this, name())),
     numCpus(p->num_cpus), numThreads(p->num_threads),
     startSyncRegion(p->start_sync_region),
     instSyncRegion(p->inst_sync_region),
@@ -233,7 +233,6 @@ SynchroTrace::CpuPort::recvTimingResp(PacketPtr pkt)
 
     // Only need timing of the memory request.
     // No need for the actual data.
-    delete pkt->req;
     delete pkt;
     return true;
 }
@@ -583,8 +582,8 @@ SynchroTrace::triggerMsg(int proc_id, ThreadID thread_id,
 
     Request::Flags flags;
 
-    Request *req = new Request(addr, this_sub_event->thisMsg->numBytes,
-                               flags, masterID);
+    RequestPtr req = std::make_shared<Request>(
+        addr, this_sub_event->thisMsg->numBytes, flags, masterID);
     req->setContext(proc_id);
 
     Packet::Command cmd;
@@ -595,7 +594,7 @@ SynchroTrace::triggerMsg(int proc_id, ThreadID thread_id,
         cmd = MemCmd::WriteReq;
 
     PacketPtr pkt = new Packet(req, cmd);
-    uint8_t *dummy_data = new uint8_t;
+    uint8_t *dummy_data = new uint8_t[1];
     *dummy_data = 0;
     pkt->dataDynamic(dummy_data);
 
@@ -616,7 +615,6 @@ SynchroTrace::triggerMsg(int proc_id, ThreadID thread_id,
         // If the packet did not issue, must delete!
         // Note: No need to delete the data, the packet destructor
         // will delete it
-        delete pkt->req;
         delete pkt;
     }
 }
