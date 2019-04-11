@@ -206,26 +206,6 @@ SynchroTrace::initStats()
     workerThreadCount = 0;
 }
 
-MasterPort*
-SynchroTrace::getCpuPort(int idx)
-{
-    assert(idx >= 0 && idx < ports.size());
-    return ports[idx];
-}
-
-BaseMasterPort &
-SynchroTrace::getMasterPort(const std::string &if_name, PortID idx)
-{
-    if (if_name != "cpu_port") {
-        // pass it along to our super class
-        return MemObject::getMasterPort(if_name, idx);
-    } else {
-        if (idx >= static_cast<int>(ports.size()))
-            panic("SynchroTrace::getMasterPort: unknown index %d\n", idx);
-        return *ports[idx];
-    }
-}
-
 bool
 SynchroTrace::CpuPort::recvTimingResp(PacketPtr pkt)
 {

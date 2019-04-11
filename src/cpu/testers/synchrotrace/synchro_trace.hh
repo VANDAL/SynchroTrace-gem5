@@ -189,13 +189,6 @@ class SynchroTrace : public MemObject
     SynchroTrace(const Params *p);
     ~SynchroTrace();
 
-    /** Used to get a reference to the master port. */
-    virtual BaseMasterPort &getMasterPort(const std::string &if_name,
-                                          PortID idx = InvalidPortID);
-
-    /** Used to get a reference to the CPU port. */
-    MasterPort *getCpuPort(int idx);
-
     virtual void init();
 
     /** Wake up the back-end simulation thread. */
