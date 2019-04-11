@@ -41,9 +41,14 @@
 # rather than a normal value, and (c) coerce values written to the
 # dict to be strings.
 
+from __future__ import print_function
+from __future__ import absolute_import
+import six
+if six.PY3:
+    long = int
 
-from convert import *
-from attrdict import attrdict
+from .convert import *
+from .attrdict import attrdict
 
 class Variable(str):
     """Intelligent proxy class for SmartDict.  Variable will use the
@@ -138,17 +143,11 @@ class SmartDict(attrdict):
         dict.__setitem__(self, key, str(item))
 
     def values(self):
-        return [ Variable(v) for v in dict.values(self) ]
-
-    def itervalues(self):
-        for value in dict.itervalues(self):
+        for value in dict.values(self):
             yield Variable(value)
 
     def items(self):
-        return [ (k, Variable(v)) for k,v in dict.items(self) ]
-
-    def iteritems(self):
-        for key,value in dict.iteritems(self):
+        for key,value in dict.items(self):
             yield key, Variable(value)
 
     def get(self, key, default='False'):

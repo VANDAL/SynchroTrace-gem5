@@ -45,9 +45,14 @@
 #
 #####################################################################
 
+from __future__ import print_function
+from __future__ import absolute_import
+import six
+if six.PY3:
+    long = int
+
 import copy
 
-import params
 
 class BaseProxy(object):
     def __init__(self, search_self, search_up):
@@ -82,6 +87,7 @@ class BaseProxy(object):
     __rmul__ = __mul__
 
     def _mulcheck(self, result, base):
+        from . import params
         for multiplier in self._multipliers:
             if isproxy(multiplier):
                 multiplier = multiplier.unproxy(base)
@@ -91,7 +97,7 @@ class BaseProxy(object):
                     raise TypeError(
                         "Proxy multiplier must be a numerical param")
                 multiplier = multiplier.getValue()
-            result *= multiplier
+            result = result * multiplier
         return result
 
     def unproxy(self, base):
@@ -182,13 +188,15 @@ class AttrProxy(BaseProxy):
             if hasattr(val, '_visited'):
                 visited = getattr(val, '_visited')
 
-            if not visited:
+            if visited:
+                return None, False
+
+            if not isproxy(val):
                 # for any additional unproxying to be done, pass the
                 # current, rather than the original object so that proxy
                 # has the right context
                 obj = val
-            else:
-                return None, False
+
         except:
             return None, False
         while isproxy(val):
@@ -232,6 +240,7 @@ class AllProxy(BaseProxy):
         return 'all'
 
 def isproxy(obj):
+    from . import params
     if isinstance(obj, (BaseProxy, params.EthernetAddr)):
         return True
     elif isinstance(obj, (list, tuple)):
@@ -261,6 +270,3 @@ Self = ProxyFactory(search_self = True, search_up = False)
 
 # limit exports on 'from proxy import *'
 __all__ = ['Parent', 'Self']
-
-# see comment on imports at end of __init__.py.
-import params # for EthernetAddr

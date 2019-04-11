@@ -60,6 +60,9 @@
 #####################################################################
 
 from __future__ import print_function
+import six
+if six.PY3:
+    long = int
 
 import copy
 import datetime
@@ -68,17 +71,20 @@ import sys
 import time
 import math
 
-import proxy
-import ticks
-from util import *
+from . import proxy
+from . import ticks
+from .util import *
 
 def isSimObject(*args, **kwargs):
+    from . import SimObject
     return SimObject.isSimObject(*args, **kwargs)
 
 def isSimObjectSequence(*args, **kwargs):
+    from . import SimObject
     return SimObject.isSimObjectSequence(*args, **kwargs)
 
 def isSimObjectClass(*args, **kwargs):
+    from . import SimObject
     return SimObject.isSimObjectClass(*args, **kwargs)
 
 allParams = {}
@@ -175,6 +181,7 @@ class ParamDesc(object):
 
     def __getattr__(self, attr):
         if attr == 'ptype':
+            from . import SimObject
             ptype = SimObject.allClasses[self.ptype_str]
             assert isSimObjectClass(ptype)
             self.ptype = ptype
@@ -454,6 +461,10 @@ class String(ParamValue,str):
 # operations in a type-safe way.  e.g., a Latency times an int returns
 # a new Latency object.
 class NumericParamValue(ParamValue):
+    @staticmethod
+    def unwrap(v):
+        return v.value if isinstance(v, NumericParamValue) else v
+
     def __str__(self):
         return str(self.value)
 
@@ -472,23 +483,69 @@ class NumericParamValue(ParamValue):
 
     def __mul__(self, other):
         newobj = self.__class__(self)
-        newobj.value *= other
+        newobj.value *= NumericParamValue.unwrap(other)
         newobj._check()
         return newobj
 
     __rmul__ = __mul__
 
-    def __div__(self, other):
+    def __truediv__(self, other):
         newobj = self.__class__(self)
-        newobj.value /= other
+        newobj.value /= NumericParamValue.unwrap(other)
+        newobj._check()
+        return newobj
+
+    def __floordiv__(self, other):
+        newobj = self.__class__(self)
+        newobj.value //= NumericParamValue.unwrap(other)
+        newobj._check()
+        return newobj
+
+
+    def __add__(self, other):
+        newobj = self.__class__(self)
+        newobj.value += NumericParamValue.unwrap(other)
         newobj._check()
         return newobj
 
     def __sub__(self, other):
         newobj = self.__class__(self)
-        newobj.value -= other
+        newobj.value -= NumericParamValue.unwrap(other)
         newobj._check()
         return newobj
+
+    def __iadd__(self, other):
+        self.value += NumericParamValue.unwrap(other)
+        self._check()
+        return self
+
+    def __isub__(self, other):
+        self.value -= NumericParamValue.unwrap(other)
+        self._check()
+        return self
+
+    def __imul__(self, other):
+        self.value *= NumericParamValue.unwrap(other)
+        self._check()
+        return self
+
+    def __itruediv__(self, other):
+        self.value /= NumericParamValue.unwrap(other)
+        self._check()
+        return self
+
+    def __ifloordiv__(self, other):
+        self.value //= NumericParamValue.unwrap(other)
+        self._check()
+        return self
+
+    def __lt__(self, other):
+        return self.value < NumericParamValue.unwrap(other)
+
+    # Python 2.7 pre __future__.division operators
+    # TODO: Remove these when after "import division from __future__"
+    __div__ =  __truediv__
+    __idiv__ = __itruediv__
 
     def config_value(self):
         return self.value
@@ -555,6 +612,9 @@ class CheckedInt(NumericParamValue):
     def __call__(self, value):
         self.__init__(value)
         return value
+
+    def __index__(self):
+        return int(self.value)
 
     @classmethod
     def cxx_predecls(cls, code):
@@ -854,7 +914,7 @@ class Bool(ParamValue):
         code('%s to_bool(%s, %s);' % (ret, src, dest))
 
 def IncEthernetAddr(addr, val = 1):
-    bytes = map(lambda x: int(x, 16), addr.split(':'))
+    bytes = [ int(x, 16) for x in addr.split(':') ]
     bytes[5] += val
     for i in (5, 4, 3, 2, 1):
         val,rem = divmod(bytes[i], 256)
@@ -1232,7 +1292,7 @@ class MetaEnum(MetaParamValue):
                 raise TypeError("Enum-derived class attribute 'map' " \
                       "must be of type dict")
             # build list of value strings from map
-            cls.vals = cls.map.keys()
+            cls.vals = list(cls.map.keys())
             cls.vals.sort()
         elif 'vals' in init_dict:
             if not isinstance(cls.vals, list):
@@ -1403,7 +1463,7 @@ class Enum(ParamValue):
     @classmethod
     def cxx_ini_parse(cls, code, src, dest, ret):
         code('if (false) {')
-        for elem_name in cls.map.iterkeys():
+        for elem_name in cls.map.keys():
             code('} else if (%s == "%s") {' % (src, elem_name))
             code.indent()
             code('%s = Enums::%s;' % (dest, elem_name))
@@ -1883,8 +1943,6 @@ class PortRef(object):
 
     # Call C++ to create corresponding port connection between C++ objects
     def ccConnect(self):
-        from _m5.pyobject import connectPorts
-
         if self.ccConnected: # already done this
             return
 
@@ -1892,27 +1950,11 @@ class PortRef(object):
         if not self.peer: # nothing to connect to
             return
 
-        # check that we connect a master to a slave
-        if self.role == peer.role:
-            raise TypeError(
-                "cannot connect '%s' and '%s' due to identical role '%s'" % \
-                (peer, self, self.role))
+        port = self.simobj.getPort(self.name, self.index)
+        peer_port = peer.simobj.getPort(peer.name, peer.index)
+        port.bind(peer_port)
 
-        if self.role == 'SLAVE':
-            # do nothing and let the master take care of it
-            return
-
-        try:
-            # self is always the master and peer the slave
-            connectPorts(self.simobj.getCCObject(), self.name, self.index,
-                         peer.simobj.getCCObject(), peer.name, peer.index)
-        except:
-            print("Error connecting port %s.%s to %s.%s" %
-                  (self.simobj.path(), self.name,
-                   peer.simobj.path(), peer.name))
-            raise
         self.ccConnected = True
-        peer.ccConnected = True
 
 # A reference to an individual element of a VectorPort... much like a
 # PortRef, but has an index.
@@ -2105,5 +2147,3 @@ __all__ = ['Param', 'VectorParam',
            'NextEthernetAddr', 'NULL',
            'MasterPort', 'SlavePort',
            'VectorMasterPort', 'VectorSlavePort']
-
-import SimObject
