@@ -55,6 +55,7 @@
  * Authors: Karthik Sangaiah
  *          Ankit More
  *          Radhika Jagtap
+ *          Mike Lui
  */
 
 #ifndef __CPU_TESTERS_SYNCHROTRACE_SYNCHROTRACE_HH
@@ -86,7 +87,7 @@
 #include "mem/ruby/common/SubBlock.hh"
 #include "mem/ruby/system/RubyPort.hh"
 #include "mem/ruby/system/RubySystem.hh"
-#include "params/SynchroTrace.hh"
+#include "params/SynchroTraceReplayer.hh"
 #include "sim/stat_control.hh"
 #include "sim/system.hh"
 
@@ -121,14 +122,14 @@
  * The normal execution flow of the replay module is as follows:
  *  1) Processor wakes up
  *  2) Sub events are generated for the top event of the thread
- *  3) Based on the compute ops for that sub event, a trigger time is
+ *  3) Based on the compute ops for that subevent, a trigger time is
  *  scheduled to wakeup the core sometime in the future. The timing for the
  *  compute ops are configurable via the command line options 'cpi_iops' and
  *  'cpi_flops'.
- *  4) When the sub event's trigger time has been reached, a read or write
+ *  4) When the subevent's trigger time has been reached, a read or write
  *  request is sent out to the memory system and the core essentially blocks.
  *  5) Eventually the memory request returns as a "hitCallback" and the next
- *  sub event or event is scheduled.
+ *  subevent or event is scheduled.
  *
  * In the case of synchronization events:
  *  1) Once the master thread obtains a "create", it issues a wakeup to the
@@ -149,21 +150,28 @@
  *
  */
 
-class SynchroTrace : public MemObject
+class SynchroTraceReplayer : public MemObject
 {
+    using CoreID = PortID;
+    CoreID threadToCore(ThreadID threadId) const { return threadId % numCpus; }
+
   public:
 
     class CpuPort : public MasterPort
     {
       private:
 
-        SynchroTrace *tester;
+        SynchroTraceReplayer& m_tester;
 
       public:
 
-        CpuPort(const std::string &_name, SynchroTrace *_tester,
-                PortID _id)
-            : MasterPort(_name, _tester, _id), tester(_tester)
+        CpuPort(const std::string &name,
+                SynchroTraceReplayer& tester,
+                PortID id)
+          : MasterPort(name, &tester, id), m_tester(tester)
+        {}
+
+        virtual ~CpuPort()
         {}
 
       protected:
@@ -172,106 +180,227 @@ class SynchroTrace : public MemObject
          * Receive memory request response from the memory system to the
          * SynchroTrace CPU port
          */
-        virtual bool recvTimingResp(PacketPtr pkt);
+        virtual bool recvTimingResp(PacketPtr pkt) override
+        {
+            m_tester.msgRespRecv(id, pkt);
 
-        // TODO - Implement retry mechanism for classic memory model
-        virtual void recvRetry() {
-            panic("%s does not expect a retry\n", name());
+            // Only need timing of the memory request.
+            // No need for the actual data.
+            delete pkt;
+            return true;
         }
-        void recvTimingSnoopReq(PacketPtr pkt)
+
+        virtual void recvTimingSnoopReq(PacketPtr pkt) override
         {}
-        virtual void recvReqRetry() {
+
+        virtual void recvReqRetry() override
+        {
             panic("%s does not expect a retry\n", name());
         }
     };
 
-    typedef SynchroTraceParams Params;
-    SynchroTrace(const Params *p);
-    ~SynchroTrace();
+    using Params = SynchroTraceReplayerParams;
+    SynchroTraceReplayer(const Params *p);
+    SynchroTraceReplayer(const SynchroTraceReplayer &obj) = delete;
+    SynchroTraceReplayer& operator=(const SynchroTraceReplayer &obj) = delete;
 
     virtual void init();
 
     /** Wake up the back-end simulation thread. */
-    void wakeup();
+    void wakeupMonitor();
+
+    /** Debug logging. */
+    void wakeupDebugLog();
 
     /** Wake up the core. */
-    void wakeup(int proc_id);
+    void wakeupCore(CoreID coreId);
 
   protected:
-    class SynchroTraceStartEvent : public Event
+    class SynchroTraceMonitorEvent : public Event
     {
       private:
-
-        SynchroTrace *tester;
+        SynchroTraceReplayer& m_tester;
 
       public:
-
-        SynchroTraceStartEvent(SynchroTrace *_tester)
-            : Event(CPU_Tick_Pri), tester(_tester)
+        SynchroTraceMonitorEvent(SynchroTraceReplayer& tester)
+          : Event(CPU_Tick_Pri), m_tester(tester)
         {}
+
         /** Waking up back-end simulation thread. */
-        void process() { tester->wakeup(); }
+        void process() { m_tester.wakeupMonitor(); }
+
         virtual const char *description() const {
             return "SynchroTrace tick";
+        }
+    };
+
+    class SynchroTraceDebugLogEvent : public Event
+    {
+      private:
+        SynchroTraceReplayer& m_tester;
+
+      public:
+        SynchroTraceDebugLogEvent(SynchroTraceReplayer& tester)
+          : Event(Stat_Event_Pri), m_tester(tester)
+        {}
+
+        /** Waking up back-end simulation thread. */
+        void process() { m_tester.wakeupDebugLog(); }
+
+        virtual const char *description() const {
+            return "SynchroTrace Debug tick";
         }
     };
 
     class SynchroTraceCoreEvent : public Event
     {
       private:
-
-        SynchroTrace *tester;
-        int procID;
+        SynchroTraceReplayer& m_tester;
+        CoreID m_coreId;
 
       public:
-
-        SynchroTraceCoreEvent(SynchroTrace *_tester, int _procID)
-            : Event(CPU_Tick_Pri), tester(_tester), procID(_procID)
+        SynchroTraceCoreEvent(SynchroTraceReplayer& tester, CoreID coreId)
+          : Event{CPU_Tick_Pri}, m_tester{tester}, m_coreId{coreId}
         {}
         /** Waking up cores. */
-        void process() { tester->wakeup(procID); }
+        void process() { m_tester.wakeupCore(m_coreId); }
         virtual const char *description() const {
             return "Core event tick";
         }
     };
 
-    /** Waking up back-end simulation thread. */
-    SynchroTraceStartEvent synchroTraceStartEvent;
+  private:
+    // XXX: DO NOT CHANGE THE ORDER OF THESE STATUSES
+    enum class ThreadStatus {
+        INACTIVE,
+        ACTIVE,
+        BLOCKED_COMM,
+        BLOCKED_MUTEX,
+        BLOCKED_BARRIER,
+        BLOCKED_COND,
+        BLOCKED_JOIN,
+        COMPLETED,
+        NUM_STATUSES
+    };
 
-    /** Waking up cores. */
-    std::vector<SynchroTraceCoreEvent *> coreEvents;
+    const char* toString(ThreadStatus status)
+    {
+        switch (status) {
+        case ThreadStatus::INACTIVE:
+            return "INACTIVE";
+        case ThreadStatus::ACTIVE:
+            return "ACTIVE";
+        case ThreadStatus::BLOCKED_COMM:
+            return "BLOCKED_COMM";
+        case ThreadStatus::BLOCKED_MUTEX:
+            return "BLOCKED_MUTEX";
+        case ThreadStatus::BLOCKED_BARRIER:
+            return "BLOCKED_BARRIER";
+        case ThreadStatus::BLOCKED_COND:
+            return "BLOCKED_COND";
+        case ThreadStatus::BLOCKED_JOIN:
+            return "BLOCKED_JOIN";
+        case ThreadStatus::COMPLETED:
+            return "COMPLETED";
+        default:
+            panic("Unexpected Thread Status");
+        }
+    }
 
-    MasterID masterID;
+    /**
+     * Replay each event type.
+     *
+     * Some event replayers return a boolean to indicate whether the event was
+     * completed or not (e.g. if the event is blocked).
+     * Otherwise, the event unconditionally completes.
+     */
+    void replayCompute(
+        StEventStream& evStream, CoreID coreId, ThreadID threadId);
+    void replayMemory(
+        StEventStream& evStream, CoreID coreId, ThreadID threadId);
+    void replayComm(
+        StEventStream& evStream, CoreID coreId, ThreadID threadId);
+    void replayThreadAPI(
+        StEventStream& evStream, CoreID coreId, ThreadID threadId);
+
+    /**
+     * Try swapping the running (head) thread within a core.
+     * It's not an error if swapping is not possible, as another thread in
+     * another core may be holding a required lock.
+     * Deadlock is not detected in this function.
+     */
+    void trySwapThreads(int proc_id);
+
+    /**
+     * Function is called on core wakeups to prevent cores from stalling
+     * when scheduling multiple threads per core.
+     */
+    void swapStalledThreads(int proc_id);
+
+    /**
+     * Handles moving thread from top of thread queue on a core to the
+     * back.
+     */
+    void moveThreadToHead(int proc_id, ThreadID thread_id);
+
+    /** Simulate compute by spinning */
+    void replayCompute(ComputeOps& ops);
+
+    /** Send a blocking message request to memory system. */
+    void msgReqSend(CoreID coreId,
+                    ThreadID threadId,
+                    StEventID eventId,
+                    Addr addr,
+                    uint32_t bytes,
+                    ReqType type);
+
+    /** Memory request returned. Schedule to wake up and process next event. */
+    void msgRespRecv(PortID coreId, PacketPtr pkt);
+
+    /**
+     * For a communication event, check to see if the producer has reached
+     * the dependent event. This function also handles the case of a system
+     * call. System calls are viewed as producer->consumer interactions with
+     * the 'producer' system call having a ThreadID of 30000. For obvious
+     * reasons, there are no 'dependencies' to enforce in the case of a system
+     * call.
+     */
+    bool isCommDependencyBlocked(
+        const MemoryRequest_ThreadCommunication& comm);
+
+    /**
+     * Called when a thread detects it is blocked and cannot proceed to consume
+     * the event. All other threads scheduled on the core are checked
+     * (round-robin) to see if they are runnable, and if so, are rotated to the
+     * front of the thread queue and scheduled. If no other threads can run,
+     * then the current thread is simply rescheduled.
+     */
+    void tryCxtSwapAndSchedule(CoreID coreId);
+
+    /**
+     * There can be mutiple Producer->Consumer dependencies within an event.
+     * This function calls checkCommDependency(...) for all
+     * producer->consumer dependencies.
+     */
+    bool checkAllCommDependencies(const StEvent& this_event);
+
+
+    /** Check if all necessary threads are in barrier. */
+    bool checkBarriers(const StEvent& this_event);
+
 
   private:
-
-    enum LocalMemAccessType {
-        READ,
-        WRITE,
-    };
-
-    enum ConditionWaitType {
-        INIT,
-        QUEUED,
-        SIGNALED,
-    };
-
-    // Python params passed to SynchroTrace object
-
-    /** Vector of ports for CPU to memory system */
-    std::vector<MasterPort*> ports;
-
     /** Number of CPUs set from the cmd line */
-    int numCpus;
+    CoreID numCpus;
 
     /** Number of threads set from the cmd line */
-    int numThreads;
+    ThreadID numThreads;
 
-    /** Start of synchronization region of interest */
-    int startSyncRegion;
-
-    /** Synchronization region of interest to instrument */
-    int instSyncRegion;
+    /**
+     * Number of threads (if less than number of cores). Otherwise,
+     * number of cores.
+     */
+    int numContexts;
 
     /** Option to dump stats following each barrier */
     bool barrStatDump;
@@ -282,25 +411,8 @@ class SynchroTrace : public MemObject
     /** Directory of output files */
     std::string outDir;
 
-    /** Back-end simulator thread frequency */
-    int wakeupFreq;
-
     /** Option to use Ruby */
     bool useRuby;
-
-    /** Block Size */
-    int m_block_size_bytes;
-
-    /** Parser Object */
-    STParser *parser;
-
-    const uint16_t printCount;
-
-    /**
-     * Counter used for 'STIntervalPrint' to print event progression after
-     * N core wakeups
-     */
-    int printThreadEventCounters;
 
     /**
      * Counter used for 'STIntervalPrintByHour' to print event progression per
@@ -321,198 +433,98 @@ class SynchroTrace : public MemObject
     int workerThreadCount;
 
     /** Abstract cpi estimation for integer ops */
-    float CPI_IOPS;
+    const float CPI_IOPS;
 
     /** Abstract cpi estimation for floating point ops */
-    float CPI_FLOPS;
+    const float CPI_FLOPS;
+
+    /** Ticks for context switch on a core */
+    const uint32_t cxtSwitchTicks;
+
+    /** Ticks for pthread event */
+    const uint32_t pthTicks;
 
     /** Flag to skip Producer -> Consumer dependencies */
-    bool pcSkip;
+    const bool pcSkip;
 
     /** Block size in bytes */
-    int blockSizeBytes;
+    const int blockSizeBytes;
 
     /** Block size in bits*/
-    int blockSizeBits;
+    const int blockSizeBits;
 
     /** Memory Size in bytes */
-    uint64_t memorySizeBytes;
+    const uint64_t memorySizeBytes;
+
+
+    /**************************************************************************
+     * Per-thread data.
+     */
+
+    /** Event streams */
+    std::vector<StEventStream> perThreadEventStreams;
+
+    /** Stats */
+    std::vector<StEventID> perThreadCurrentEventId;
+
+    /** Vector of threads' statuses */
+    std::vector<ThreadStatus> perThreadStatus;
+
+    /**************************************************************************
+     * Per-core data.
+     */
+
+    /** Vector of ports for CPU to memory system */
+    std::vector<CpuPort> ports;
 
     /**
-     * Central event map: list of pointers to event deques of each thread.
-     * Each deque reads in 1000 events each time the deque size falls to
-     * 100 events.
+     * Mapping of cores' threads.
+     * A single core will have multiple threads assigned to it
+     * if (threads > cores)
+     *
+     * The front of each core's thread queue is the current running thread.
      */
-    std::deque<STEvent *> **eventMap;
+    std::vector<std::deque<ThreadID>> coreToThreadMap;
 
-    /** Vector of cores' threads */
-    std::vector<std::vector<ThreadID>> threadMap;
+    /**************************************************************************
+     * Synchronization state
+     */
 
-    /** Vector of threads' statuses, i.e. whether they are active */
-    std::vector<bool> threadStartedMap;
+    StTracePthreadMetadata pthMetadata;
+
+    /** stats: holds if thread can proceed past a barrier */
+    std::vector<bool> perThreadBarrierBlocked;
 
     /** Holds which threads currently possess a mutex lock */
-    //std::vector<bool> threadMutexMap;
-    std::vector<std::vector<Addr>> threadMutexMap;
-
-    /** Holds if thread can proceed past a barrier */
-    std::vector<bool> threadContMap;
+    std::vector<std::vector<Addr>> perThreadLocksHeld;
 
     /** Holds mutex locks in use */
     std::set<Addr> mutexLocks;
 
-    /** Holds which threads currently in conditional wait queue */
-    std::queue<ThreadID> cond_wait_queue;
-
-    /** Holds the conditional wait state for each thread */
-    std::vector<ConditionWaitType> cond_wait_states;
-    // 0 - Default state
-    // 1 - Queued in wait queue
-    // 2 - Signaled
+    /** Holds spin locks in use */
+    std::set<Addr> spinLocks;
 
     /** Holds condition variables signaled by broadcasts and signals */
     std::vector<std::map<Addr, int>> condSignals;
 
-    /** Holds spin locks in use */
-    std::set<Addr> spinLocks;
-
-    /** Map converting each slave thread's pthread address to thread ID */
-    std::map<Addr, ThreadID>  addresstoIDMap;
-
-    /** Holds barriers used in application */
-    std::map<Addr, std::set<ThreadID>> barrierMap;
-
     /** Holds which threads are waiting for a barrier */
-    std::map<Addr, std::set<ThreadID>> threadWaitMap;
+    std::map<Addr, std::set<ThreadID>> threadBarrierMap;
 
-    /** Sigil trace file pointer */
-    std::vector<gzifstream *> inputFilePointer;
+  protected:
 
-    /** Sigil synchronization region file file pointer */
-    std::vector<std::vector <gzifstream *> > syncRegionFilePointers;
+    /** Wakeup frequencies */
+    const uint64_t wakeupFreqForMonitor;
+    const uint64_t wakeupFreqForDebugLog;
 
-    /**
-     * Number of threads (if less than number of cores). Otherwise,
-     * number of cores.
-     */
-    int numContexts;
+    /** Waking up back-end simulation thread. */
+    SynchroTraceMonitorEvent synchroTraceMonitorEvent;
 
-    /** Private copy constructor */
-    SynchroTrace(const SynchroTrace &obj);
+    /** Waking up logger. */
+    SynchroTraceDebugLogEvent synchroTraceDebugLogEvent;
 
-    /** Private assignment operator */
-    SynchroTrace& operator=(const SynchroTrace &obj);
+    /** Waking up cores. */
+    std::vector<SynchroTraceCoreEvent> coreEvents;
 
-    /** Initialize debug flags and mutex lock/barrier maps */
-    void initStats();
-
-    /**
-     * Map threads to cores. Currently implemented as a round robin mapping
-     * of threads to cores.
-     */
-    void initialThreadMapping();
-
-    /**
-     * Check of master thread has completed its events and issue an exit
-     * call back.
-     */
-    void checkCompletion();
-
-    /**
-     * Debug functions to print event id for every thread per hour.
-     */
-    void printThreadEventsPerHour();
-
-    /**
-     * Debug functions to view progress, prints event id for every thread
-     *  at 50k wakeups.
-     */
-    void printThreadEvents();
-
-    /**
-     * Print Event id for specific thread before/after event is
-     * loaded/completed.
-     *
-     * @param thread_id thread ID of event
-     * @param is_end set to true if this event has completed
-     */
-    void printEvent(ThreadID thread_id, bool is_end);
-
-    /**
-     * Break up events into sub events comprised of a division of the
-     * compute ops and one memory request. The sub events are placed in
-     * a sub event list for each event. Creating sub events only occurs
-     * prior to an events actual processing as to reduce the total amount
-     * of memory usage in simulation (compared to creating a sub event for
-     * every event in the eventMap).
-     */
-    void createSubEvents(int proc_id, bool event_id_passed = false,
-                         ThreadID event_thread_id = 0);
-
-    /** Handle synchronization progress for each of the threads. */
-    void progressPthreadEvent(STEvent *this_event, int proc_id);
-
-    /**
-     * Handles progression of each thread depending on event type and
-     * status.
-     */
-    void progressEvents(int proc_id);
-
-    /**
-     * Swapping of threads within a core is allowed if:
-     * The head event in the currently allocated thread has finished an event
-     * and one of the other threads is ready.
-     *
-     * The swapThreads() function is called every time an event finishes.
-     */
-    void swapThreads(int proc_id);
-
-    /**
-     * Function is called on core wakeups to prevent cores from stalling
-     * when scheduling multiple threads per core.
-     */
-    void swapStalledThreads(int proc_id);
-
-    /**
-     * Handles moving thread from top of thread queue on a core to the
-     * back.
-     */
-    void moveThreadToHead(int proc_id, ThreadID thread_id);
-
-    /** Handles selecting a read or a write when generating sub events. */
-     LocalMemAccessType memTypeToInsert(unsigned long loc_reads,
-                                        unsigned long loc_writes,
-                                        unsigned long max_loc_reads,
-                                        unsigned long max_loc_writes,
-                                        LocalMemAccessType type);
-
-    /** Send a blocking message request to memory system. */
-    void triggerMsg(int proc_id, ThreadID thread_id,
-                    SubEvent *this_sub_event);
-
-    /** Memory request returned! Queue up next event. */
-    void hitCallback(NodeID proc, PacketPtr pkt);
-
-    /**
-     * For a communication event, check to see if the producer has reached
-     * the dependent event. This function also handles the case of a system
-     * call. System calls are viewed as producer->consumer interactions with
-     * the 'producer' system call having a ThreadID of 30000. For obvious
-     * reasons, there are no 'dependencies' to enforce in the case of a system
-     * call.
-     */
-    bool checkCommDependency(MemAddrInfo *comm_event, ThreadID thread_id);
-
-    /**
-     * There can be mutiple Producer->Consumer dependencies within an event.
-     * This function calls checkCommDependency(...) for all
-     * producer->consumer dependencies.
-     */
-    bool checkAllCommDependencies(STEvent *this_event);
-
-
-    /** Check if all necessary threads are in barrier. */
-    bool checkBarriers(STEvent *this_event);
-
+    MasterID masterID;
 };
 #endif // __CPU_TESTERS_SYNCHROTRACE_SYNCHROTRACE_HH
