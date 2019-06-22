@@ -754,23 +754,19 @@ SynchroTraceReplayer::tryCxtSwapAndSchedule(CoreID coreId)
     std::deque<ThreadID>& threadsOnCore = coreToThreadMap[coreId];
     assert(threadsOnCore.size() > 0);
 
-    size_t idx = 0;
-    while (++idx < threadsOnCore.size())
+    auto it = threadsOnCore.begin();
+    while (++it != threadsOnCore.cend())
     {
-        if (perThreadStatus[threadsOnCore[idx]] != ThreadStatus::INACTIVE &&
-            perThreadStatus[threadsOnCore[idx]] != ThreadStatus::COMPLETED)
+        if (perThreadStatus[*it] != ThreadStatus::INACTIVE &&
+            perThreadStatus[*it] != ThreadStatus::COMPLETED)
             break;
     }
 
-    if (idx != threadsOnCore.size())
+    if (it != threadsOnCore.cend())
     {
         // Found a thread to swap.
         // Rotate threads round-robin.
-        for (size_t i = 0; i < idx; ++i)
-        {
-            threadsOnCore.push_back(threadsOnCore.front());
-            threadsOnCore.pop_front();
-        }
+        std::rotate(threadsOnCore.begin(), it, threadsOnCore.end());
 
         // Schedule the context swap.
         schedule(coreEvents[coreId],
