@@ -244,6 +244,8 @@ StTraceParser::parseCompEventTo(std::vector<StEvent>& buffer,
     //
     // @ 661,0,100,44 $ 0x402b110 0x402b113 $ 0xeffe968 0xeffe96f * 0x44f 0x450
 
+    // Can use one variable, but keep two so we can check
+    // if a the string was successfully parsed.
     char* line_cstr = &line[0];
     char* next_pos = NULL;
 
@@ -279,18 +281,17 @@ StTraceParser::parseCompEventTo(std::vector<StEvent>& buffer,
     tempReadAddrs.clear();
 
     // write addrs
-    // XXX rename
     auto push_writes = [&] (uintptr_t addr, uint32_t bytes) {
         tempWriteAddrs.push_back({addr, bytes, ReqType::REQ_WRITE});
     };
     while (*line_cstr == '$')
     {
-        line_cstr++;
+        ++line_cstr;
         const uint64_t start = {std::strtoull(line_cstr, &next_pos, 0)};
-        const uint64_t end = {std::strtoull(next_pos, &line_cstr, 0)};
+        const uint64_t end = {std::strtoull(next_pos+1, &line_cstr, 0)};
+        ++line_cstr;
+
         foreach_MemAddrChunk(start, end, push_writes);
-        if (*line_cstr)
-            line_cstr++;
     }
 
     assert(*line_cstr == READ_ADDR_DELIM || *line_cstr == '\0');
@@ -301,12 +302,11 @@ StTraceParser::parseCompEventTo(std::vector<StEvent>& buffer,
     };
     while (*line_cstr == '*')
     {
-        line_cstr++;
+        ++line_cstr;
         const uint64_t start = {std::strtoull(line_cstr, &next_pos, 0)};
-        const uint64_t end = {std::strtoull(next_pos, &line_cstr, 0)};
+        const uint64_t end = {std::strtoull(next_pos+1, &line_cstr, 0)};
         foreach_MemAddrChunk(start, end, push_reads);
-        if (*line_cstr)
-            line_cstr++;
+        ++line_cstr;
     }
 
     assert(*line_cstr == '\0');
