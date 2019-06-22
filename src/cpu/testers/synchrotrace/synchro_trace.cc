@@ -93,8 +93,8 @@ SynchroTraceReplayer::SynchroTraceReplayer(const Params *p)
     perThreadLocksHeld(p->num_threads),
     condSignals(p->num_threads),
     /** gem5 events to wakeup at specific cycles */
-    wakeupFreqForMonitor(p->master_wakeup_freq),
-    wakeupFreqForDebugLog(50000*p->master_wakeup_freq),
+    wakeupFreqForMonitor(p->monitor_wakeup_freq),
+    wakeupFreqForDebugLog(50000*p->monitor_wakeup_freq),
     synchroTraceMonitorEvent(*this),
     synchroTraceDebugLogEvent(*this),
     masterID(p->system->getMasterId(this, name()))
