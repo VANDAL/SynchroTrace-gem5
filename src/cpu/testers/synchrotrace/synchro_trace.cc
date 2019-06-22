@@ -389,19 +389,15 @@ SynchroTraceReplayer::replayThreadAPI(
         break;
     case ThreadApi::EventType::MUTEX_UNLOCK:
     {
-        panic_if(perThreadStatus[threadId] != ThreadStatus::ACTIVE,
-                 "Thread %d is unlocking mutex but isn't event ACTIVE!",
-                 threadId);
-
         std::vector<Addr>& locksHeld = perThreadLocksHeld[threadId];
         auto s_it = mutexLocks.find(pthAddr);
         auto v_it = std::find(locksHeld.begin(), locksHeld.end(), pthAddr);
 
-        panic_if(s_it == mutexLocks.end(),
+        fatal_if(s_it == mutexLocks.end(),
                  "Thread %d tried to unlock mutex <0x%X> before having lock!",
                  threadId,
                  pthAddr);
-        panic_if(v_it == locksHeld.end(),
+        fatal_if(v_it == locksHeld.end(),
                  "Thread %d tried to unlock mutex <0x%X> "
                  "but a different thread holds the lock!",
                  threadId,
@@ -433,7 +429,7 @@ SynchroTraceReplayer::replayThreadAPI(
         const ThreadID serfThreadId =
             {pthMetadata.addressToIdMap().at(pthAddr)};
 
-        panic_if(perThreadStatus[serfThreadId] != ThreadStatus::INACTIVE,
+        fatal_if(perThreadStatus[serfThreadId] != ThreadStatus::INACTIVE,
                  "Tried to create Thread %d, but it already exists!",
                  serfThreadId);
         perThreadStatus[serfThreadId] = ThreadStatus::ACTIVE;
@@ -519,7 +515,7 @@ SynchroTraceReplayer::replayThreadAPI(
                 perThreadStatus[tid] = ThreadStatus::ACTIVE;
             }
             // clear the barrier
-            panic_if(threadBarrierMap.erase(pthAddr) != 1,
+            fatal_if(threadBarrierMap.erase(pthAddr) != 1,
                      "Tried to clear barrier that doesn't exist! <0x%X>",
                      pthAddr);
             evStream.pop();
@@ -625,7 +621,7 @@ SynchroTraceReplayer::replayThreadAPI(
                  "Thread %d is spinunlocking, but isn't event ACTIVE!",
                  threadId);
         auto it = spinLocks.find(pthAddr);
-        panic_if(it == spinLocks.end(),
+        fatal_if(it == spinLocks.end(),
                  "Thread %d is unlocking spinlock <0x%X>, "
                  "but it isn't even locked!",
                  threadId,
@@ -646,7 +642,7 @@ SynchroTraceReplayer::replayThreadAPI(
     case ThreadApi::EventType::SEM_POST:
     case ThreadApi::EventType::SEM_GETV:
     case ThreadApi::EventType::SEM_DEST:
-        panic("Unsupported Semaphore Event Type encountered: %d!",
+        fatal("Unsupported Semaphore Event Type encountered: %d!",
               static_cast<EventIntegerType>(ev.threadApi.eventType));
         break;
 
@@ -711,7 +707,7 @@ void SynchroTraceReplayer::msgReqSend(CoreID coreId,
         // will delete it
         delete pkt;
 
-        panic("Unexpected Timing Request failed for "
+        fatal("Unexpected Timing Request failed for "
               "Core: %d; Thread: %d; Event: %zu\n", coreId, threadId, eventId);
     }
 }

@@ -197,7 +197,7 @@ StTraceParser::parseTo(std::vector<StEvent>& buffer,
         parseMarkerEventTo(buffer, line, threadId, eventId);
         break;
     default:
-        panic("Invalid line detected in thread: %d\n", threadId);
+        fatal("Invalid line detected in thread: %d\n", threadId);
     }
 }
 
@@ -531,8 +531,7 @@ StEventStream::StEventStream(ThreadID threadId,
     parser{bytesPerCacheBlock, bytesInMainMemoryTotal},
     buffer{}
 {
-    if (!traceFile)
-        panic("Failed to open file: %s\n", filename);
+    fatal_if(!traceFile, "failed to open file: %s\n", filename);
 
     buffer.reserve(initialBufferSize);
     buffer_current = buffer.cbegin();
@@ -593,8 +592,7 @@ StTracePthreadMetadata::StTracePthreadMetadata(const std::string& eventDir)
     std::string filename = {csprintf("%s/sigil.pthread.out",
                                      eventDir.c_str())};
     std::ifstream pthFile{filename};
-    if (!pthFile)
-        panic("Failed to open file: %s\n", filename);
+    fatal_if(!pthFile, "failed to open file: %s\n", filename);
 
     parsePthreadFile(pthFile);
 }
