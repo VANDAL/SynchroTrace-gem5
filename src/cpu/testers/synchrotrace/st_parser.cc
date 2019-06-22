@@ -177,18 +177,21 @@ void
 StTraceParser::parseTo(std::vector<StEvent>& buffer,
                        std::string& line,
                        ThreadID threadId,
-                       StEventID eventId)
+                       StEventID& eventId)
 {
     switch (line[0])
     {
     case COMP_EVENT_TOKEN:
         parseCompEventTo(buffer, line, threadId, eventId);
+        ++eventId;
         break;
     case COMM_EVENT_TOKEN:
         parseCommEventTo(buffer, line, threadId, eventId);
+        ++eventId;
         break;
     case THREADAPI_EVENT_TOKEN:
         parseThreadEventTo(buffer, line, threadId, eventId);
+        ++eventId;
         break;
     case MARKER_EVENT_TOKEN:
         parseMarkerEventTo(buffer, line, threadId, eventId);
@@ -519,6 +522,7 @@ StEventStream::StEventStream(ThreadID threadId,
                              size_t initialBufferSize)
   : threadId{threadId},
     eventId{0},
+    lineNo{0},
     filename{csprintf("%s/sigil.events.out-%d.gz",
                       eventDir.c_str(),
                       threadId)},
@@ -568,7 +572,9 @@ StEventStream::refill()
     {
         if (std::getline(traceFile, line))
         {
-            eventId++;
+            ++lineNo;
+
+            // the event id is incremented by the parser
             parser.parseTo(buffer, line, threadId, eventId);
         }
         else

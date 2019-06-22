@@ -107,11 +107,15 @@ class StTraceParser
      *
      * The buffer can theoretically be any type with push_back/emplace_back
      * semantics.
+     *
+     * The parser takes a reference to the event id so it knows to increment it
+     * if it is a real event (comp, comm, thread), and not a meta-event like a
+     * marker.
      */
     void parseTo(std::vector<StEvent>& buffer,
                  std::string& line,
                  ThreadID threadId,
-                 StEventID eventId);
+                 StEventID& eventId);
 
   private:
     void parseCompEventTo(std::vector<StEvent>& buffer,
@@ -146,6 +150,7 @@ class StEventStream
     /** Trace attributes */
     ThreadID threadId;
     StEventID eventId;
+    uint64_t lineNo;
 
     /** File streams */
     std::string filename;
