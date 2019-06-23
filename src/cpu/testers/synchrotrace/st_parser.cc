@@ -379,7 +379,12 @@ StTraceParser::parseCompEventTo(std::vector<StEvent>& buffer,
                     readsInserted < totalLocalReads) ?
                 ReqType::REQ_READ : (writesInserted < totalLocalWrites) ?
                 ReqType::REQ_WRITE :
-                (assert(readsInserted < totalLocalReads), ReqType::REQ_READ);
+                // sanity check: should either have reads left,
+                // or this is the last memory access
+                (assert(readsInserted < totalLocalReads ||
+                        (writesInserted + readsInserted ==
+                         totalMemoryAccesses)),
+                 ReqType::REQ_READ);
         }
 
         // Distribute the residuals randomly amongst the generated compute
