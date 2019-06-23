@@ -411,9 +411,6 @@ class SynchroTraceReplayer : public MemObject
     /** Directory of output files */
     std::string outDir;
 
-    /** Option to use Ruby */
-    bool useRuby;
-
     /**
      * Counter used for 'STIntervalPrintByHour' to print event progression per
      * hour
@@ -447,14 +444,24 @@ class SynchroTraceReplayer : public MemObject
     /** Flag to skip Producer -> Consumer dependencies */
     const bool pcSkip;
 
+    /**************************************************************************
+     * Memory configuration
+     */
+
+    /**
+     * Option to use Ruby
+     * If Ruby is used, then it's used for memory configuration.
+     */
+    const bool useRuby;
+
     /** Block size in bytes */
-    const int blockSizeBytes;
+    uint64_t blockSizeBytes;
 
     /** Block size in bits*/
-    const int blockSizeBits;
+    uint64_t blockSizeBits;
 
     /** Memory Size in bytes */
-    const uint64_t memorySizeBytes;
+    uint64_t memorySizeBytes;
 
 
     /**************************************************************************

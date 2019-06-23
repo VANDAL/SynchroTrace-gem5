@@ -63,56 +63,72 @@
 
 SynchroTraceReplayer::SynchroTraceReplayer(const Params *p)
   : MemObject(p),
-    /** general configuration */
+    // general configuration
     numCpus(p->num_cpus),
     numThreads(p->num_threads),
     numContexts(std::min(p->num_threads, p->num_cpus)),
     barrStatDump(p->barrier_stat_dump),
     eventDir(p->event_dir),
     outDir(p->output_dir),
-    useRuby(p->ruby),
     CPI_IOPS(p->cpi_iops),
     CPI_FLOPS(p->cpi_flops),
     cxtSwitchTicks(100),
     pthTicks(1),
     pcSkip(p->pc_skip),
-    /** memory configuration */
-    blockSizeBytes(p->ruby ?
-                   RubySystem::getBlockSizeBytes() :
-                   p->block_size_bytes),
-    blockSizeBits(p->ruby ?
-                  RubySystem::getBlockSizeBits() :
-                  floorLog2(p->block_size_bytes)),
+    // memory configuration
+    useRuby(p->ruby),
+    blockSizeBytes(p->block_size_bytes),
+    blockSizeBits(floorLog2(p->block_size_bytes)),
     memorySizeBytes(p->mem_size_bytes),
-    /** general per-thread/core state */
+    // general per-thread/core state
     perThreadStatus(p->num_threads, ThreadStatus::INACTIVE),
     coreToThreadMap(p->num_cpus),
-    /** synchronization state */
+    // synchronization state
     pthMetadata(p->event_dir),
     perThreadBarrierBlocked(p->num_threads, false),
     perThreadLocksHeld(p->num_threads),
     condSignals(p->num_threads),
-    /** gem5 events to wakeup at specific cycles */
+    // gem5 events to wakeup at specific cycles
     wakeupFreqForMonitor(p->monitor_wakeup_freq),
     wakeupFreqForDebugLog(50000*p->monitor_wakeup_freq),
     synchroTraceMonitorEvent(*this),
     synchroTraceDebugLogEvent(*this),
     masterID(p->system->getMasterId(this, name()))
 {
+    // MDL20190622 Some members MUST be set in the init routine
+    // because the initialization order of all SimObjects is undefined
+    // afaict. Variables that depend on other SimObjects being initialized
+    // should be set in the init routine. Only variables that depend on
+    // input parameters should be set here in the constructor.
+    //
+    // In contrast, some member MUST be set in the constructor
+    // because they are needed BEFORE `init` gets to run.
+    // Namely, the ports need to be generated, as gem5 uses
+    // them when connected up SimObjects (before `init`ing).
+
     fatal_if(p->num_cpus > std::numeric_limits<CoreID>::max(),
              "cannot support %d cpus", p->num_cpus);
     fatal_if(!isPowerOf2(numCpus),
-             "number of cpus expected to be power of 2");
-    fatal_if(!isPowerOf2(blockSizeBytes),
-             "cache block size expected to be power of 2");
+             "number of cpus expected to be power of 2, but got %d",
+             numCpus);
+
+    // Initialize the SynchroTrace to Memory ports
+    for (CoreID i = 0; i < numCpus; i++)
+        ports.emplace_back(csprintf("%s-port%d", name(), i), *this, i);
 }
 
 void
 SynchroTraceReplayer::init()
 {
-    // Initialize the SynchroTrace to Memory ports
-    for (CoreID i = 0; i < numCpus; i++)
-        ports.emplace_back(csprintf("%s-port%d", name(), i), *this, i);
+    // Memory configuration from Ruby
+    if (useRuby)
+    {
+        blockSizeBytes = RubySystem::getBlockSizeBytes();
+        blockSizeBits = RubySystem::getBlockSizeBits();
+    }
+    fatal_if(!isPowerOf2(blockSizeBytes),
+             "cache block size expected to be power of 2, but got: %d",
+             blockSizeBytes);
 
     // Initialize gem5 event per core
     for (int i = 0; i < numContexts; i++)
