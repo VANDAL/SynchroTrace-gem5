@@ -204,7 +204,10 @@ class SynchroTraceReplayer : public MemObject
     SynchroTraceReplayer(const SynchroTraceReplayer &obj) = delete;
     SynchroTraceReplayer& operator=(const SynchroTraceReplayer &obj) = delete;
 
-    virtual void init();
+    virtual Port &getPort(const std::string &if_name,
+                          PortID idx=InvalidPortID) override;
+
+    virtual void init() override;
 
     /** Wake up the back-end simulation thread. */
     void wakeupMonitor();
