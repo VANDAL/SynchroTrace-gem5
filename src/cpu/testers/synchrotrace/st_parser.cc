@@ -542,9 +542,9 @@ StEventStream::StEventStream(ThreadID threadId,
     buffer_current = buffer.cbegin();
     buffer_end = buffer.cend();
 
-    eventsPerFill = {initialBufferSize/2};
-    // Heuristic to "half-fill" the buffer at a time.
-    // Note that one event from the trace file may decompress to multiple
+    eventsPerFill = {initialBufferSize/8};
+    // Heuristic to "partial-fill" the buffer at a time.
+    // Note that one event from the trace file may decompress to MANY
     // events in the buffer. Thus, we use a vector which can expand to fit
     // extra events. Even if the buffer is expanded beyond its original
     // size, we still use the same amount on each fill.

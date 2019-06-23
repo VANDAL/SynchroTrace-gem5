@@ -169,7 +169,7 @@ class StEventStream
                   const std::string& eventDir,
                   uint32_t bytesPerCacheBlock,
                   uint64_t bytesInMainMemoryTotal,
-                  size_t initialBufferSize=8192);
+                  size_t initialBufferSize=1024);
 
     /**
      * Returns the next event in the stream.
