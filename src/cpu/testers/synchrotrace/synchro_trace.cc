@@ -149,7 +149,7 @@ SynchroTraceReplayer::init()
     // Create trace streams for each event thread
     for (ThreadID tid = 0; tid < numThreads; tid++)
         perThreadEventStreams.emplace_back(
-            tid, eventDir, blockSizeBytes, memorySizeBytes);
+            tid+1, eventDir, blockSizeBytes, memorySizeBytes);
 
     // Set master thread as active
     perThreadStatus[0] = ThreadStatus::ACTIVE;
