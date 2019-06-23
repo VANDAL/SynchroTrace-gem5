@@ -157,9 +157,10 @@ SynchroTraceReplayer::init()
     // Schedule first tick of master simulator thread
     schedule(synchroTraceMonitorEvent, 1);
 
-    // Schedule first tick of the simulator cores
-    for (int core = 0; core < numContexts; core++)
-        schedule(coreEvents[core], clockPeriod());
+    // Schedule first tick of the initial core
+    // (the other cores begin 'inactive', and
+    //  expect the initial thread to start them)
+    schedule(coreEvents[0], clockPeriod());
 
     // Schedule the logging event, if enabled
     if (DTRACE(STIntervalPrint))
