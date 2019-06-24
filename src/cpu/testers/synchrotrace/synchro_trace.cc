@@ -456,6 +456,11 @@ SynchroTraceReplayer::replayThreadAPI(
 
         workerThreadCount++;
 
+        fatal_if(pthMetadata.addressToIdMap().find(pthAddr) ==
+                 pthMetadata.addressToIdMap().cend(),
+                 "could not find pthread thread id in "
+                 "sigil.pthread.out file: %d\n"
+                 "Are the traces and pthread file in sync?", pthAddr);
         const ThreadID serfThreadId =
             {pthMetadata.addressToIdMap().at(pthAddr)};
 
