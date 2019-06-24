@@ -186,6 +186,19 @@ SynchroTrace::init()
     parser->generateEventQueue();
 }
 
+Port&
+SynchroTrace::getPort(const std::string& if_name, PortID idx)
+{
+    // 'cpu_port' in SynchroTrace.py
+
+    if (if_name != "cpu_port")
+        return MemObject::getPort(if_name, idx);
+    else if (idx > -1 && idx < static_cast<ssize_t>(ports.size()))
+        return *ports[idx];
+    else
+        fatal("synchrotrace: out-of-range getPort(%d)", idx);
+}
+
 void
 SynchroTrace::initStats()
 {

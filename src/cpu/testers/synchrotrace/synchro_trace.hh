@@ -189,7 +189,11 @@ class SynchroTrace : public MemObject
     SynchroTrace(const Params *p);
     ~SynchroTrace();
 
-    virtual void init();
+    virtual Port &getPort(const std::string &if_name,
+                          PortID idx=InvalidPortID) override;
+
+    virtual void init() override;
+
 
     /** Wake up the back-end simulation thread. */
     void wakeup();
