@@ -350,12 +350,7 @@ class SynchroTraceReplayer : public MemObject
     void replayCompute(ComputeOps& ops);
 
     /** Send a blocking message request to memory system. */
-    void msgReqSend(CoreID coreId,
-                    ThreadID threadId,
-                    StEventID eventId,
-                    Addr addr,
-                    uint32_t bytes,
-                    ReqType type);
+    void msgReqSend(CoreID coreId, Addr addr, uint32_t bytes, ReqType type);
 
     /** Memory request returned. Schedule to wake up and process next event. */
     void msgRespRecv(PortID coreId, PacketPtr pkt);
@@ -387,12 +382,9 @@ class SynchroTraceReplayer : public MemObject
      */
     bool checkAllCommDependencies(const StEvent& this_event);
 
-
     /** Check if all necessary threads are in barrier. */
     bool checkBarriers(const StEvent& this_event);
 
-
-  private:
     /** Number of CPUs set from the cmd line */
     CoreID numCpus;
 
@@ -474,8 +466,8 @@ class SynchroTraceReplayer : public MemObject
     /** Event streams */
     std::vector<StEventStream> perThreadEventStreams;
 
-    /** Stats */
-    std::vector<StEventID> perThreadCurrentEventId;
+    /** Current event */
+    std::vector<StEventID> perThreadEventIds;
 
     /** Vector of threads' statuses */
     std::vector<ThreadStatus> perThreadStatus;

@@ -189,12 +189,23 @@ struct InsnMarker {
 };
 
 
+/**
+ * The original event id in the trace file.
+ * Multiple replay events can be generated from the same event in the trace.
+ * This marker groups replay events that were generated from the same trace
+ * event.
+ */
+struct TraceEventMarker {
+    const StEventID eventId;
+};
+
+
 struct StEvent {
     /**
      * Tag for event.
      * Events have a broad classification.
      */
-    enum class Tag
+    enum class Tag : uint8_t
     {
         UNDEFINED,     // Initial value.
 
@@ -213,7 +224,7 @@ struct StEvent {
         INSN_MARKER,   // Marks a specific number of machine instructions
                        // passed in the trace.
 
-        EVENT_MARKER,  // New event in trace.
+        TRACE_EVENT_MARKER,  // New event in trace.
 
         END_OF_EVENTS  // The last event in the event stream.
     };
@@ -236,6 +247,10 @@ struct StEvent {
     using InsnMarkerTagType = std::integral_constant<Tag, Tag::INSN_MARKER>;
     static constexpr auto InsnMarkerTag = InsnMarkerTagType{};
 
+    using TraceEventMarkerTagType =
+        std::integral_constant<Tag, Tag::TRACE_EVENT_MARKER>;
+    static constexpr auto TraceEventMarkerTag = TraceEventMarkerTagType{};
+
     using EndTagType = std::integral_constant<Tag, Tag::END_OF_EVENTS>;
     static constexpr auto EndTag = EndTagType{};
 
@@ -247,7 +262,6 @@ struct StEvent {
      * impl: these are expected to be set only during construction,
      * hence they are const.
      */
-    const Tag tag = Tag::UNDEFINED;
     union
     {
         ComputeOps                        computeOps;
@@ -255,84 +269,61 @@ struct StEvent {
         MemoryRequest_ThreadCommunication memoryReqComm;
         ThreadApi                         threadApi;
         InsnMarker                        insnMarker;
+        TraceEventMarker                  traceEventMarker;
         End                               end;
     };
-
-    /**
-     * The original event id in the trace file.
-     * Multiple replay events can be generated
-     * from the same event in the trace.
-     */
-    const StEventID eventId = InvalidEventID;
-    const ThreadID threadId = InvalidThreadID;
+    const Tag tag = Tag::UNDEFINED;
 
     /**
      * Use tagged dispatched constructors to create the variant.
      * Allow direct construction instead of static builder methods that may
      * cause additional copies/moves
      */
-    StEvent(StEventID eventId,
-            ThreadID threadId,
-            ComputeTagType,
+    StEvent(ComputeTagType,
             uint32_t iops,
             uint32_t flops) noexcept
-      : tag{Tag::COMPUTE},
-        computeOps{iops, flops},
-        eventId{eventId},
-        threadId{threadId}
+      : computeOps{iops, flops},
+        tag{Tag::COMPUTE}
     {}
 
-    StEvent(StEventID eventId, ThreadID threadId,
-            MemoryTagType,
+    StEvent(MemoryTagType,
             const MemoryRequest& memReq) noexcept
-      : tag{Tag::MEMORY},
-        memoryReq{memReq},
-        eventId{eventId},
-        threadId{threadId}
+      : memoryReq{memReq},
+        tag{Tag::MEMORY}
     {}
 
-    StEvent(StEventID eventId,
-            ThreadID threadId,
-            MemoryCommTagType,
+    StEvent(MemoryCommTagType,
             Addr addr,
             uint32_t bytes,
             StEventID sourceEventId,
             ThreadID sourceThreadId) noexcept
-      : tag{Tag::MEMORY},
-        memoryReqComm{addr, bytes, sourceEventId, sourceThreadId},
-        eventId{eventId},
-        threadId{threadId}
+      : memoryReqComm{addr, bytes, sourceEventId, sourceThreadId},
+        tag{Tag::MEMORY}
     {}
 
-    StEvent(StEventID eventId,
-            ThreadID threadId,
-            ThreadApiTagType,
+    StEvent(ThreadApiTagType,
             ThreadApi::EventType type,
             Addr pthAddr,
             Addr mutexLockAddr) noexcept
-      : tag{Tag::THREAD_API},
-        threadApi{pthAddr, mutexLockAddr, type},
-        eventId{eventId},
-        threadId{threadId}
+      : threadApi{pthAddr, mutexLockAddr, type},
+        tag{Tag::THREAD_API}
     {}
 
-    StEvent(StEventID eventId,
-            ThreadID threadId,
-            InsnMarkerTagType,
+    StEvent(InsnMarkerTagType,
             uint64_t insns) noexcept
-      : tag{Tag::INSN_MARKER},
-        insnMarker{insns},
-        eventId{eventId},
-        threadId{threadId}
+      : insnMarker{insns},
+        tag{Tag::INSN_MARKER}
     {}
 
-    StEvent(StEventID eventId,
-            ThreadID threadId,
-            EndTagType) noexcept
-      : tag{Tag::END_OF_EVENTS},
-        end{},
-        eventId{eventId},
-        threadId{threadId}
+    StEvent(TraceEventMarkerTagType,
+            StEventID eventId) noexcept
+      : traceEventMarker{eventId},
+        tag{Tag::TRACE_EVENT_MARKER}
+    {}
+
+    StEvent(EndTagType) noexcept
+      : end{},
+        tag{Tag::END_OF_EVENTS}
     {}
 };
 

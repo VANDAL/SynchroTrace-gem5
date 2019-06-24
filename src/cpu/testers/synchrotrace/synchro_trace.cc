@@ -81,6 +81,8 @@ SynchroTraceReplayer::SynchroTraceReplayer(const Params *p)
     blockSizeBits(floorLog2(p->block_size_bytes)),
     memorySizeBytes(p->mem_size_bytes),
     // general per-thread/core state
+    perThreadEventStreams{},
+    perThreadEventIds(p->num_threads),
     perThreadStatus(p->num_threads, ThreadStatus::INACTIVE),
     coreToThreadMap(p->num_cpus),
     // synchronization state
@@ -197,7 +199,7 @@ SynchroTraceReplayer::wakeupMonitor()
         hourCounter = std::time(NULL);
         DPRINTFN("%s", std::ctime(&hourCounter));
         for (int i = 0; i < numThreads; i++)
-            DPRINTFN("Thread %d: Event %d\n", i, perThreadCurrentEventId[i]);
+            DPRINTFN("Thread<%d>:Event<%d>\n", i, perThreadEventIds[i]);
     }
 
     // Reschedule self
@@ -209,17 +211,16 @@ void
 SynchroTraceReplayer::wakeupDebugLog()
 {
     for (int i = 0; i < numThreads; i++)
-        DPRINTFN("Thread %d is on Event %d\n", i, perThreadCurrentEventId[i]);
+        DPRINTFN("Thread<%d>:Event<%d>:Status<%s>\n",
+                 i,
+                 perThreadEventIds[i],
+                 toString(perThreadStatus[i]));
 
     for (int i = 0; i < numCpus; i++)
         if (i < numThreads)
-            DPRINTFN("Thread %d is on top Core %d\n",
-                     coreToThreadMap[i][0], i);
+            DPRINTFN("Core<%d>:Thread<%d>\n", i, coreToThreadMap[i][0]);
         else
-            DPRINTFN("No Thread is on top Core %d\n", i);
-
-    for (int i = 0; i < numThreads; i++)
-        DPRINTFN("Thread %d is %s\n", i, toString(perThreadStatus[i]));
+            DPRINTFN("Core<%d>:EMPTY\n", i);
 
     // Reschedule self
     schedule(synchroTraceDebugLogEvent,
@@ -281,10 +282,13 @@ SynchroTraceReplayer::wakeupCore(CoreID coreId)
         break;
 
     /** Meta events */
-    case StEvent::Tag::EVENT_MARKER:
+    case StEvent::Tag::TRACE_EVENT_MARKER:
         // a simple metadata marker; reschedule the next actual event
         DPRINTF(STEventPrint, "Started %d, %d\n",
-                currThreadId, evStream.peek().eventId);
+                currThreadId, evStream.peek().traceEventMarker.eventId);
+        assert(perThreadEventIds[currThreadId] ==
+               evStream.peek().traceEventMarker.eventId);
+        perThreadEventIds[currThreadId]++;  // increment after, starts at 0
         schedule(coreEvents[coreId], curTick());
         evStream.pop();
         break;
@@ -327,8 +331,6 @@ SynchroTraceReplayer::replayMemory(
     // Send LD/ST for computation events
     const StEvent& ev = evStream.peek();
     msgReqSend(coreId,
-               threadId,
-               ev.eventId,
                ev.memoryReq.addr,
                ev.memoryReq.bytesRequested,
                ev.memoryReq.type);
@@ -356,8 +358,6 @@ SynchroTraceReplayer::replayComm(
     {
         // If dependencies have been met, trigger the read reqeust.
         msgReqSend(coreId,
-                   ev.threadId,
-                   ev.eventId,
                    ev.memoryReqComm.addr,
                    ev.memoryReqComm.bytesRequested,
                    ReqType::REQ_READ);
@@ -694,8 +694,6 @@ SynchroTraceReplayer::replayThreadAPI(
  */
 
 void SynchroTraceReplayer::msgReqSend(CoreID coreId,
-                                      ThreadID threadId,
-                                      StEventID eventId,
                                       Addr addr,
                                       uint32_t bytes,
                                       ReqType type)
@@ -729,12 +727,19 @@ void SynchroTraceReplayer::msgReqSend(CoreID coreId,
 
     // Send memory request
     if (ports[coreId].sendTimingReq(pkt)) {
-        DPRINTF(STDebug, "%d: Message Triggered:"
-                " Core %d; Thread %d; Event %d; Addr 0x%x\n",
-                curTick(), coreId, threadId, eventId, addr);
+        DPRINTF(STDebug,
+                "Tick<%d>: Message Triggered:"
+                " Core<%d>:Thread<%d>:Event<%d>:Addr<0x%x>\n",
+                curTick(),
+                coreId,
+                coreToThreadMap[coreId][0],
+                perThreadEventIds[coreToThreadMap[coreId][0]],
+                addr);
     } else {
         warn("%d: Packet did not issue from CoreID: %d, ThreadID: %d",
-             curTick(), coreId, threadId);
+             curTick(),
+             coreId,
+             coreToThreadMap[coreId][0]);
         // If the packet did not issue, delete it and create a new one upon
         // reissue. Cannot reuse it because it's created with the current
         // system state.
@@ -743,7 +748,10 @@ void SynchroTraceReplayer::msgReqSend(CoreID coreId,
         delete pkt;
 
         fatal("Unexpected Timing Request failed for "
-              "Core: %d; Thread: %d; Event: %zu\n", coreId, threadId, eventId);
+              "Core: %d; Thread: %d; Event: %zu\n",
+              coreId,
+              coreToThreadMap[coreId][0],
+              perThreadEventIds[coreToThreadMap[coreId][0]]);
     }
 }
 
@@ -768,7 +776,7 @@ SynchroTraceReplayer::isCommDependencyBlocked(
 {
     // If the producer thread's EventID is greater than the dependent event
     // then the dependency is satisfied
-    return perThreadCurrentEventId[comm.sourceThreadId] > comm.sourceEventId;
+    return perThreadEventIds[comm.sourceThreadId] > comm.sourceEventId;
 }
 
 void

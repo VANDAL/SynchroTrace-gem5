@@ -149,8 +149,8 @@ class StEventStream
 {
     /** Trace attributes */
     ThreadID threadId;
-    StEventID eventId;
-    uint64_t lineNo;
+    StEventID lastEventIdParsed;
+    uint64_t lastLineParsed;
 
     /** File streams */
     std::string filename;
@@ -181,6 +181,12 @@ class StEventStream
      * Pops the next event off stream.
      */
     void pop();
+
+    /**
+     * Get the current last line number parsed
+     */
+    uint64_t getLineNo() const { return lastLineParsed; }
+    uint64_t getEventNo() const { return lastEventIdParsed; }
 
   private:
     /**

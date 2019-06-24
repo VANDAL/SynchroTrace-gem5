@@ -67,6 +67,7 @@ constexpr StEvent::MemoryTagType StEvent::MemoryTag;
 constexpr StEvent::MemoryCommTagType StEvent::MemoryCommTag;
 constexpr StEvent::ThreadApiTagType StEvent::ThreadApiTag;
 constexpr StEvent::InsnMarkerTagType StEvent::InsnMarkerTag;
+constexpr StEvent::TraceEventMarkerTagType StEvent::TraceEventMarkerTag;
 constexpr StEvent::EndTagType StEvent::EndTag;
 
 namespace
@@ -179,17 +180,24 @@ StTraceParser::parseTo(std::vector<StEvent>& buffer,
                        ThreadID threadId,
                        StEventID& eventId)
 {
+    // Place a trace event marker before every "real" trace event.
+    // Then decompose the trace event into replay events and place
+    // them in the event stream.
+
     switch (line[0])
     {
     case COMP_EVENT_TOKEN:
+        buffer.emplace_back(StEvent::TraceEventMarkerTag, eventId);
         parseCompEventTo(buffer, line, threadId, eventId);
         ++eventId;
         break;
     case COMM_EVENT_TOKEN:
+        buffer.emplace_back(StEvent::TraceEventMarkerTag, eventId);
         parseCommEventTo(buffer, line, threadId, eventId);
         ++eventId;
         break;
     case THREADAPI_EVENT_TOKEN:
+        buffer.emplace_back(StEvent::TraceEventMarkerTag, eventId);
         parseThreadEventTo(buffer, line, threadId, eventId);
         ++eventId;
         break;
@@ -323,8 +331,7 @@ StTraceParser::parseCompEventTo(std::vector<StEvent>& buffer,
     if (totalMemoryAccesses == 0)
     {
         // Create a single sub event if there are no memory ops.
-        buffer.emplace_back(
-          eventId, threadId, StEvent::ComputeTag, iops, flops);
+        buffer.emplace_back(StEvent::ComputeTag, iops, flops);
     }
     else
     {
@@ -346,26 +353,20 @@ StTraceParser::parseCompEventTo(std::vector<StEvent>& buffer,
         {
             // Create a compute sub-event to "wait" before issuing the
             // following memory request.
-            buffer.emplace_back(eventId,
-                                threadId,
-                                StEvent::ComputeTag,
+            buffer.emplace_back(StEvent::ComputeTag,
                                 iopsPerAccess,
                                 flopsPerAccess);
 
             switch(type)
             {
                 case ReqType::REQ_READ:
-                    buffer.emplace_back(eventId,
-                                        threadId,
-                                        StEvent::MemoryTag,
+                    buffer.emplace_back(StEvent::MemoryTag,
                                         tempReadAddrs[readsInserted %
                                                       readEventsSize]);
                     readsInserted++;
                     break;
                 case ReqType::REQ_WRITE:
-                    buffer.emplace_back(eventId,
-                                        threadId,
-                                        StEvent::MemoryTag,
+                    buffer.emplace_back(StEvent::MemoryTag,
                                         tempWriteAddrs[writesInserted %
                                                        writeEventsSize]);
                     writesInserted++;
@@ -443,9 +444,7 @@ StTraceParser::parseCommEventTo(std::vector<StEvent>& buffer,
         foreach_MemAddrChunk(start,
                              end,
                              [=, &buffer](uintptr_t addr, uint32_t bytes) {
-                                buffer.emplace_back(eventId,
-                                                    threadId,
-                                                    StEvent::MemoryCommTag,
+                                buffer.emplace_back(StEvent::MemoryCommTag,
                                                     addr,
                                                     bytes,
                                                     prodEventId,
@@ -500,8 +499,7 @@ StTraceParser::parseThreadEventTo(std::vector<StEvent>& buffer,
     // Do not expect anymore data to be parsed
     assert(*next_pos == '\0');
 
-    buffer.emplace_back(
-      eventId, threadId, StEvent::ThreadApiTag, type, pthAddr, mutexLockAddr);
+    buffer.emplace_back(StEvent::ThreadApiTag, type, pthAddr, mutexLockAddr);
 }
 
 void
@@ -515,7 +513,7 @@ StTraceParser::parseMarkerEventTo(std::vector<StEvent>& buffer,
     // ! 4096
 
     const uint64_t insns = {std::strtoull(&line[0] + 2, NULL, 0)};
-    buffer.emplace_back(eventId, threadId, StEvent::InsnMarkerTag, insns);
+    buffer.emplace_back(StEvent::InsnMarkerTag, insns);
 }
 
 
@@ -526,8 +524,8 @@ StEventStream::StEventStream(ThreadID threadId,
                              uint64_t bytesInMainMemoryTotal,
                              size_t initialBufferSize)
   : threadId{threadId},
-    eventId{0},
-    lineNo{0},
+    lastEventIdParsed{0},
+    lastLineParsed{0},
     filename{csprintf("%s/sigil.events.out-%d.gz",
                       eventDir.c_str(),
                       threadId)},
@@ -576,14 +574,14 @@ StEventStream::refill()
     {
         if (std::getline(traceFile, line))
         {
-            ++lineNo;
+            ++lastLineParsed;
 
             // the event id is incremented by the parser
-            parser.parseTo(buffer, line, threadId, eventId);
+            parser.parseTo(buffer, line, threadId, lastEventIdParsed);
         }
         else
         {
-            buffer.emplace_back(eventId, threadId, StEvent::EndTag);
+            buffer.emplace_back(StEvent::EndTag);
             break;
         }
     }
