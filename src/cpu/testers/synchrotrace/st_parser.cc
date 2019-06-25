@@ -429,11 +429,11 @@ StTraceParser::parseCommEventTo(std::vector<StEvent>& buffer,
 
     while (*line_cstr == COMM_EVENT_TOKEN)
     {
-        line_cstr++;
+        ++line_cstr;
         const ThreadID prodThreadId =
             {safe_strtoll<ThreadID>(line_cstr, &next_pos)};
         const StEventID prodEventId =
-            {safe_strtoul<StEventID>(line_cstr, &next_pos)};
+            {safe_strtoul<StEventID>(next_pos, &line_cstr)};
 
         const uint64_t start = {std::strtoull(line_cstr, &next_pos, 0)};
         assert(next_pos != line_cstr);
@@ -450,8 +450,7 @@ StTraceParser::parseCommEventTo(std::vector<StEvent>& buffer,
                                                     prodEventId,
                                                     prodThreadId);
                                 });
-        if (*line_cstr)
-            line_cstr++;
+        ++line_cstr;
     }
 }
 
@@ -635,7 +634,8 @@ StTracePthreadMetadata::parseAddressToID(std::string& line)
     const ThreadID threadId = {safe_strtoll<ThreadID>(line_cstr, &next_pos)};
     assert(threadId > 0);
 
-    // Keep Thread IDs in a map
+    // Keep Thread IDs in a map.
+    // The trace has base-1 thread ids, but replay expects base-0.
     auto p = m_addressToIdMap.insert({threadAddr, threadId - 1});
     assert(p.second);
 }
