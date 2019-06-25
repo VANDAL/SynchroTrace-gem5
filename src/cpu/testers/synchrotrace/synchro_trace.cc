@@ -72,9 +72,9 @@ SynchroTraceReplayer::SynchroTraceReplayer(const Params *p)
     outDir(p->output_dir),
     CPI_IOPS(p->cpi_iops),
     CPI_FLOPS(p->cpi_flops),
-    cxtSwitchTicks(p->cxt_switch_ticks),
-    pthTicks(p->pth_ticks),
-    schedSliceTicks(p->sched_slice_ticks),
+    cxtSwitchCycles(p->cxt_switch_cycles),
+    pthCycles(p->pth_cycles),
+    schedSliceCycles(p->sched_slice_cycles),
     pcSkip(p->pc_skip),
     // memory configuration
     useRuby(p->ruby),
@@ -406,7 +406,7 @@ SynchroTraceReplayer::replayThreadAPI(ThreadContext& tcxt, CoreID coreId)
                     pthAddr);
             tcxt.evStream.pop();
             schedule(coreEvents[coreId],
-                     curTick() + clockPeriod() * Cycles(pthTicks));
+                     curTick() + clockPeriod() * Cycles(pthCycles));
         }
         else
         {
@@ -417,7 +417,7 @@ SynchroTraceReplayer::replayThreadAPI(ThreadContext& tcxt, CoreID coreId)
                     pthAddr);
             if (!tryCxtSwapAndSchedule(coreId))
                 schedule(coreEvents[coreId],
-                         curTick() + clockPeriod() * Cycles(schedSliceTicks));
+                         curTick() + clockPeriod() * Cycles(schedSliceCycles));
         }
     }
         break;
@@ -441,7 +441,7 @@ SynchroTraceReplayer::replayThreadAPI(ThreadContext& tcxt, CoreID coreId)
         locksHeld.erase(v_it);
         tcxt.evStream.pop();
         schedule(coreEvents[coreId],
-                 curTick() + clockPeriod() * Cycles(pthTicks));
+                 curTick() + clockPeriod() * Cycles(pthCycles));
     }
         break;
 
@@ -489,7 +489,7 @@ SynchroTraceReplayer::replayThreadAPI(ThreadContext& tcxt, CoreID coreId)
         // (scheduling the same event multiple times before it fires
         //  is not allowed)
         schedule(coreEvents[coreId],
-                 curTick() + clockPeriod() * Cycles(pthTicks));
+                 curTick() + clockPeriod() * Cycles(pthCycles));
         if (!coreEvents[serfCoreId].scheduled())
             // wake up core (only core 0 is initially working)
             schedule(coreEvents[serfCoreId], curTick() + clockPeriod());
@@ -517,7 +517,7 @@ SynchroTraceReplayer::replayThreadAPI(ThreadContext& tcxt, CoreID coreId)
                 DPRINTFN("Last thread joined!");
             tcxt.evStream.pop();
             schedule(coreEvents[coreId],
-                     curTick() + clockPeriod() * Cycles(pthTicks));
+                     curTick() + clockPeriod() * Cycles(pthCycles));
             break;
         case ThreadStatus::ACTIVE:
         case ThreadStatus::BLOCKED_COMM:
@@ -535,7 +535,7 @@ SynchroTraceReplayer::replayThreadAPI(ThreadContext& tcxt, CoreID coreId)
                     toString(threadContexts[serfThreadId].status));
             if (!tryCxtSwapAndSchedule(coreId))
                 schedule(coreEvents[coreId],
-                         curTick() + clockPeriod() * Cycles(schedSliceTicks));
+                         curTick() + clockPeriod() * Cycles(schedSliceCycles));
             break;
         case ThreadStatus::INACTIVE:
             fatal("Tried joining Thread %d that was not created yet!",
@@ -576,14 +576,14 @@ SynchroTraceReplayer::replayThreadAPI(ThreadContext& tcxt, CoreID coreId)
                      pthAddr);
             tcxt.evStream.pop();
             schedule(coreEvents[coreId],
-                     curTick() + clockPeriod() * Cycles(pthTicks));
+                     curTick() + clockPeriod() * Cycles(pthCycles));
         }
         else
         {
             tcxt.status = ThreadStatus::BLOCKED_BARRIER;
             if (!tryCxtSwapAndSchedule(coreId))
                 schedule(coreEvents[coreId],
-                         curTick() + clockPeriod() * Cycles(schedSliceTicks));
+                         curTick() + clockPeriod() * Cycles(schedSliceCycles));
         }
     }
         break;
@@ -625,14 +625,14 @@ SynchroTraceReplayer::replayThreadAPI(ThreadContext& tcxt, CoreID coreId)
             tcxt.status = ThreadStatus::ACTIVE;
             tcxt.evStream.pop();
             schedule(coreEvents[coreId],
-                     curTick() + clockPeriod() * Cycles(pthTicks));
+                     curTick() + clockPeriod() * Cycles(pthCycles));
         }
         else
         {
             tcxt.status = ThreadStatus::BLOCKED_COND;
             if (!tryCxtSwapAndSchedule(coreId))
                 schedule(coreEvents[coreId],
-                         curTick() + clockPeriod() * Cycles(schedSliceTicks));
+                         curTick() + clockPeriod() * Cycles(schedSliceCycles));
         }
     }
         break;
@@ -653,7 +653,7 @@ SynchroTraceReplayer::replayThreadAPI(ThreadContext& tcxt, CoreID coreId)
         }
         tcxt.evStream.pop();
         schedule(coreEvents[coreId],
-                 curTick() + clockPeriod() * Cycles(pthTicks));
+                 curTick() + clockPeriod() * Cycles(pthCycles));
     }
         break;
 
@@ -672,7 +672,7 @@ SynchroTraceReplayer::replayThreadAPI(ThreadContext& tcxt, CoreID coreId)
         // Reschedule regardless of whether the lock was acquired.
         // If the lock wasn't acquired, we spin and try again the next cycle.
         schedule(coreEvents[coreId],
-                 curTick() + clockPeriod() * Cycles(pthTicks));
+                 curTick() + clockPeriod() * Cycles(pthCycles));
     }
         break;
     case ThreadApi::EventType::SPIN_UNLOCK:
@@ -691,7 +691,7 @@ SynchroTraceReplayer::replayThreadAPI(ThreadContext& tcxt, CoreID coreId)
         spinLocks.erase(it);
         tcxt.evStream.pop();
         schedule(coreEvents[coreId],
-                 curTick() + clockPeriod() * Cycles(pthTicks));
+                 curTick() + clockPeriod() * Cycles(pthCycles));
     }
         break;
 
@@ -825,7 +825,7 @@ SynchroTraceReplayer::tryCxtSwapAndSchedule(CoreID coreId)
     // Rotate threads round-robin and schedule the context swap.
     std::rotate(threadsOnCore.begin(), it, threadsOnCore.end());
     schedule(coreEvents[coreId],
-             curTick() + clockPeriod() * Cycles(cxtSwitchTicks));
+             curTick() + clockPeriod() * Cycles(cxtSwitchCycles));
     return true;
 }
 

@@ -465,14 +465,14 @@ class SynchroTraceReplayer : public MemObject
     /** Abstract cpi estimation for floating point ops */
     const float CPI_FLOPS;
 
-    /** Ticks for context switch on a core */
-    const uint32_t cxtSwitchTicks;
+    /** Cycles for context switch on a core */
+    const uint32_t cxtSwitchCycles;
 
-    /** Ticks for pthread event */
-    const uint32_t pthTicks;
+    /** Cycles for pthread event */
+    const uint32_t pthCycles;
 
-    /** Ticks to simulate the time slice the scheduler gives to a thread */
-    const uint32_t schedSliceTicks;
+    /** Cycles to simulate the time slice the scheduler gives to a thread */
+    const uint32_t schedSliceCycles;
 
     /** Flag to skip Producer -> Consumer dependencies */
     const bool pcSkip;
