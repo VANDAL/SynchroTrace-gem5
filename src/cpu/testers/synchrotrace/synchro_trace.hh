@@ -152,13 +152,9 @@
 
 class SynchroTraceReplayer : public MemObject
 {
-    using CoreID = PortID;
-    CoreID threadIdToCoreId(ThreadID threadId) const
-    {
-        return threadId % numCpus;
-    }
-
   public:
+
+    using CoreID = PortID;
 
     class CpuPort : public MasterPort
     {
@@ -390,10 +386,15 @@ class SynchroTraceReplayer : public MemObject
      * Called when a thread detects it is blocked and cannot proceed to consume
      * the event. All other threads scheduled on the core are checked
      * (round-robin) to see if they are runnable, and if so, are rotated to the
-     * front of the thread queue and scheduled. If no other threads can run,
-     * then the current thread is simply rescheduled.
+     * front of the thread queue and scheduled. A runnable thread may be
+     * blocked, in which case, upon being rescheduled, it is expected to just
+     * recheck if it can unblock itself.
+     *
+     * Returns `true` if another thread was able to be scheduled and `false`
+     * otherwise. It is up to the caller to decide whether or not to reschedule
+     * itself.
      */
-    void tryCxtSwapAndSchedule(CoreID coreId);
+    bool tryCxtSwapAndSchedule(CoreID coreId);
 
     /**
      * There can be mutiple Producer->Consumer dependencies within an event.
@@ -404,6 +405,16 @@ class SynchroTraceReplayer : public MemObject
 
     /** Check if all necessary threads are in barrier. */
     bool checkBarriers(const StEvent& this_event);
+
+    /** Simple helper */
+    CoreID threadIdToCoreId(ThreadID threadId) const
+    {
+        return threadId % numCpus;
+    }
+
+    /**************************************************************************
+     * General configuration
+     */
 
     /** Number of CPUs set from the cmd line */
     CoreID numCpus;
@@ -444,6 +455,10 @@ class SynchroTraceReplayer : public MemObject
      */
     int workerThreadCount;
 
+    /**************************************************************************
+     * Timing configuration
+     */
+
     /** Abstract cpi estimation for integer ops */
     const float CPI_IOPS;
 
@@ -455,6 +470,9 @@ class SynchroTraceReplayer : public MemObject
 
     /** Ticks for pthread event */
     const uint32_t pthTicks;
+
+    /** Ticks to simulate the time slice the scheduler gives to a thread */
+    const uint32_t schedSliceTicks;
 
     /** Flag to skip Producer -> Consumer dependencies */
     const bool pcSkip;

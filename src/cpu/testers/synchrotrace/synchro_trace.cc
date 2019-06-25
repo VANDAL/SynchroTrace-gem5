@@ -72,8 +72,9 @@ SynchroTraceReplayer::SynchroTraceReplayer(const Params *p)
     outDir(p->output_dir),
     CPI_IOPS(p->cpi_iops),
     CPI_FLOPS(p->cpi_flops),
-    cxtSwitchTicks(100),
-    pthTicks(1),
+    cxtSwitchTicks(p->cxt_switch_ticks),
+    pthTicks(p->pth_ticks),
+    schedSliceTicks(p->sched_slice_ticks),
     pcSkip(p->pc_skip),
     // memory configuration
     useRuby(p->ruby),
@@ -362,7 +363,13 @@ SynchroTraceReplayer::replayComm(ThreadContext& tcxt, CoreID coreId)
     else
     {
         tcxt.status = ThreadStatus::BLOCKED_COMM;
-        tryCxtSwapAndSchedule(coreId);
+
+        // If there are no threads to swap then just keep checking until this
+        // dependency is satisfied. This thread will wakeup again on the same
+        // event.
+        if (!tryCxtSwapAndSchedule(coreId))
+            schedule(coreEvents[coreId],
+                     curTick() + clockPeriod() * Cycles(1));
     }
 }
 
@@ -374,6 +381,10 @@ SynchroTraceReplayer::replayThreadAPI(ThreadContext& tcxt, CoreID coreId)
     // sure threads have been replayed in a sensible way.
     // Each case is responsible for popping events, rescheduling,
     // and swapping threads appropriately.
+    //
+    // If a thread is blocked and can't swap in a different active thread,
+    // then it generally will simulate a kernel scheduler rescheduling the
+    // thread via a gem5 event reschedule of the core.
 
     assert(tcxt.evStream.peek().tag == StEvent::Tag::THREAD_API);
     const StEvent& ev = tcxt.evStream.peek();
@@ -404,7 +415,9 @@ SynchroTraceReplayer::replayThreadAPI(ThreadContext& tcxt, CoreID coreId)
                     "Thread %d blocked trying to lock mutex <0x%X>",
                     tcxt.threadId,
                     pthAddr);
-            tryCxtSwapAndSchedule(coreId);
+            if (!tryCxtSwapAndSchedule(coreId))
+                schedule(coreEvents[coreId],
+                         curTick() + clockPeriod() * Cycles(schedSliceTicks));
         }
     }
         break;
@@ -520,7 +533,9 @@ SynchroTraceReplayer::replayThreadAPI(ThreadContext& tcxt, CoreID coreId)
                     coreId,
                     serfThreadId,
                     toString(threadContexts[serfThreadId].status));
-            tryCxtSwapAndSchedule(coreId);
+            if (!tryCxtSwapAndSchedule(coreId))
+                schedule(coreEvents[coreId],
+                         curTick() + clockPeriod() * Cycles(schedSliceTicks));
             break;
         case ThreadStatus::INACTIVE:
             fatal("Tried joining Thread %d that was not created yet!",
@@ -566,7 +581,9 @@ SynchroTraceReplayer::replayThreadAPI(ThreadContext& tcxt, CoreID coreId)
         else
         {
             tcxt.status = ThreadStatus::BLOCKED_BARRIER;
-            tryCxtSwapAndSchedule(coreId);
+            if (!tryCxtSwapAndSchedule(coreId))
+                schedule(coreEvents[coreId],
+                         curTick() + clockPeriod() * Cycles(schedSliceTicks));
         }
     }
         break;
@@ -613,7 +630,9 @@ SynchroTraceReplayer::replayThreadAPI(ThreadContext& tcxt, CoreID coreId)
         else
         {
             tcxt.status = ThreadStatus::BLOCKED_COND;
-            tryCxtSwapAndSchedule(coreId);
+            if (!tryCxtSwapAndSchedule(coreId))
+                schedule(coreEvents[coreId],
+                         curTick() + clockPeriod() * Cycles(schedSliceTicks));
         }
     }
         break;
@@ -783,17 +802,9 @@ SynchroTraceReplayer::isCommDependencyBlocked(
             comm.sourceEventId);
 }
 
-void
+bool
 SynchroTraceReplayer::tryCxtSwapAndSchedule(CoreID coreId)
 {
-    // TODO(soon)
-    // This function assumes pthread tick timings, but it is also used if
-    // a thread is blocked on a communication event. There should be separate
-    // `swap` and `reschedule` timings passed in to allow the communication
-    // event to be scheduled differently.
-    // MDL20190619 How much different do we want to handle communication event
-    // blocks?
-
     auto& threadsOnCore = coreToThreadMap[coreId];
     assert(threadsOnCore.size() > 0);
 
@@ -806,23 +817,16 @@ SynchroTraceReplayer::tryCxtSwapAndSchedule(CoreID coreId)
             break;
     }
 
-    if (it != threadsOnCore.cend())
-    {
-        // Found a thread to swap.
-        // Rotate threads round-robin.
-        std::rotate(threadsOnCore.begin(), it, threadsOnCore.end());
+    // if no threads were found that could be swapped
+    if (it == threadsOnCore.cend())
+        return false;
 
-        // Schedule the context swap.
-        schedule(coreEvents[coreId],
-                 curTick() + clockPeriod() * Cycles(cxtSwitchTicks));
-    }
-    else if (threadsOnCore.front().get().status != ThreadStatus::COMPLETED &&
-             threadsOnCore.front().get().status != ThreadStatus::INACTIVE)
-    {
-        // No thread available to run, reschedule the current thread to try
-        // running again the next cycle.
-        schedule(coreEvents[coreId], curTick() + clockPeriod() * Cycles(1));
-    }
+    // else we found a thread to swap.
+    // Rotate threads round-robin and schedule the context swap.
+    std::rotate(threadsOnCore.begin(), it, threadsOnCore.end());
+    schedule(coreEvents[coreId],
+             curTick() + clockPeriod() * Cycles(cxtSwitchTicks));
+    return true;
 }
 
 SynchroTraceReplayer*
