@@ -54,6 +54,7 @@
 # Authors: Karthik Sangaiah
 #          Ankit More
 #          Radhika Jagtap
+#          Mike Lui
 #
 # Instantiate SynchroTrace with Ruby
 #
@@ -75,49 +76,26 @@ from ruby import Ruby
 config_path = os.path.dirname(os.path.abspath(__file__))
 config_root = os.path.dirname(config_path)
 
-# Add gem5 options
 parser = optparse.OptionParser()
+SynchroTrace.addSynchrotraceOptions(parser)
+
+# Add gem5 options
+# E.g.
+# --num-cpus
 Options.addCommonOptions(parser)
 
-# SynchroTrace specific options
-# Mandatory to set the path to the traces directory
-#parser.add_option("--num-cpus", type="int", default=4,
-#                  help="Number of cpus")
-parser.add_option("--num-threads", type="int",
-                  help="Number of threads")
-parser.add_option("--event-dir", type="string", default="",
-                  help="Path to the directory that contains the event traces")
-parser.add_option("--start-sync-region", type="int", default=0,
-                  help="Start simulation of syncronization region")
-parser.add_option("--inst-sync-region", type="int", default=0,
-                  help="Select synchronization region to instrument")
-parser.add_option("--barrier-stat-dump", action="store_true", default=False,
-                  help="Dump stats to stats.txt following each barrier")
-parser.add_option("--output-dir", type="string", default="",
-                  help="Path to the directory where to dump the output")
-parser.add_option("--master-freq", type="int", default=1,
-                  help="Frequency at which to wake up master event")
-parser.add_option("--cpi-iops", type="float", default=1,
-                  help="CPI for integer ops")
-parser.add_option("--cpi-flops", type="float", default=1,
-                  help="CPI for floating point ops")
+# Add Ruby specific and protocol specific options
+# E.g. --vcs-per-vnet
+Ruby.define_options(parser)
+
+# Required to configure Ruby
 parser.add_option("--buffers-per-data-vc", type="int", default=4,
                   help="Buffer Depth per Virtual Channel")
-#parser.add_option("--vcs-per-vnet", type="int", default=4,
-#                  help="Number of Virtual Channels per Network")
 parser.add_option("--bandwidth-factor", type="int", default=16,
                   help="Number of Virtual Channels per Network")
 parser.add_option("--l1-latency", action="store", type="int", default="3",
                   help="Latency of a L1 Hit")
-parser.add_option("--pc-skip", action="store_true", default=False,
-                  help="Don't enforce producer->consumer dependencies")
-parser.add_option("--memsys-clock", action="store", type="string",
-                  default='1.6GHz',
-                  help="Clock for Memory System")
 
-# Add the ruby specific and protocol specific options
-Ruby.define_options(parser)
-# execfile(os.path.join(config_root, "common", "Options.py"))
 (options, args) = parser.parse_args()
 
 if args:
@@ -125,20 +103,20 @@ if args:
     sys.exit(1)
 
 # Create the SynchroTrace replay mechanism
-tester = SynchroTrace(num_cpus = options.num_cpus,
-      num_threads = options.num_threads,
-      event_dir = options.event_dir,
-      output_dir = options.output_dir,
-      master_wakeup_freq = options.master_freq,
-      cpi_iops = options.cpi_iops,
-      cpi_flops = options.cpi_flops,
-      ruby = options.ruby,
-      block_size_bytes = options.cacheline_size,
-      mem_size_bytes = toMemorySize(options.mem_size),
-      pc_skip = options.pc_skip,
-      start_sync_region = options.start_sync_region,
-      inst_sync_region = options.inst_sync_region,
-      barrier_stat_dump = options.barrier_stat_dump)
+tester = SynchroTraceReplayer(num_cpus=options.num_cpus,
+                              num_threads=options.num_threads,
+                              event_dir=options.event_dir,
+                              output_dir=options.output_dir,
+                              monitor_wakeup_freq=options.monitor_freq,
+                              cpi_iops=options.cpi_iops,
+                              cpi_flops=options.cpi_flops,
+                              ruby=options.ruby,
+                              block_size_bytes=options.cacheline_size,
+                              mem_size_bytes=toMemorySize(options.mem_size),
+                              pc_skip=options.pc_skip,
+                              start_sync_region=options.start_sync_region,
+                              inst_sync_region=options.inst_sync_region,
+                              barrier_stat_dump=options.barrier_stat_dump)
 
 # Create the system
 system = System(cache_line_size = options.cacheline_size,
@@ -161,7 +139,7 @@ Ruby.create_system(options, False, system)
 system.ruby.clk_domain = SrcClockDomain(clock = options.ruby_clock,
                                         voltage_domain = system.voltage_domain)
 
-# Tie the SynchroTrace ports to the ruby cpu ports
+# Tie the SynchroTrace tester ports to the ruby cpu ports
 assert(options.num_cpus == len(system.ruby._cpu_ports))
 for ruby_port in system.ruby._cpu_ports:
     system.cpu.cpu_port = ruby_port.slave
