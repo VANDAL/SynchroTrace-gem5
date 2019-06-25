@@ -471,15 +471,24 @@ SynchroTraceReplayer::replayThreadAPI(ThreadContext& tcxt, CoreID coreId)
                  "Tried to create Thread %d, but it already exists!",
                  serfThreadId);
 
-        // wake up core (only core 0 is initially working)
         threadContexts[serfThreadId].status = ThreadStatus::ACTIVE;
         const CoreID serfCoreId = {threadIdToCoreId(serfThreadId)};
-        schedule(coreEvents[serfCoreId], curTick() + clockPeriod());
+
+        // The new thread may be mapped to an already active core,
+        // e.g. the currently executing core. Check that we don't
+        // schedule a wakeup on the same core twice. Creating a
+        // thread mapped to this core will NOT immediately cause a
+        // context switch.
+        // (scheduling the same event multiple times before it fires
+        //  is not allowed)
+        schedule(coreEvents[coreId],
+                 curTick() + clockPeriod() * Cycles(pthTicks));
+        if (!coreEvents[serfCoreId].scheduled())
+            // wake up core (only core 0 is initially working)
+            schedule(coreEvents[serfCoreId], curTick() + clockPeriod());
 
         DPRINTF(STDebug, "Thread %d created", serfThreadId);
         tcxt.evStream.pop();
-        schedule(coreEvents[coreId],
-                 curTick() + clockPeriod() * Cycles(pthTicks));
     }
         break;
     case ThreadApi::EventType::THREAD_JOIN:
