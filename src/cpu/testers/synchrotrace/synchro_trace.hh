@@ -153,7 +153,10 @@
 class SynchroTraceReplayer : public MemObject
 {
     using CoreID = PortID;
-    CoreID threadToCore(ThreadID threadId) const { return threadId % numCpus; }
+    CoreID threadIdToCoreId(ThreadID threadId) const
+    {
+        return threadId % numCpus;
+    }
 
   public:
 
@@ -198,6 +201,43 @@ class SynchroTraceReplayer : public MemObject
             panic("%s does not expect a retry\n", name());
         }
     };
+
+    // XXX: DO NOT CHANGE THE ORDER OF THESE STATUSES
+    enum class ThreadStatus {
+        INACTIVE,
+        ACTIVE,
+        BLOCKED_COMM,
+        BLOCKED_MUTEX,
+        BLOCKED_BARRIER,
+        BLOCKED_COND,
+        BLOCKED_JOIN,
+        COMPLETED,
+        NUM_STATUSES
+    };
+
+    const char* toString(ThreadStatus status)
+    {
+        switch (status) {
+        case ThreadStatus::INACTIVE:
+            return "INACTIVE";
+        case ThreadStatus::ACTIVE:
+            return "ACTIVE";
+        case ThreadStatus::BLOCKED_COMM:
+            return "BLOCKED_COMM";
+        case ThreadStatus::BLOCKED_MUTEX:
+            return "BLOCKED_MUTEX";
+        case ThreadStatus::BLOCKED_BARRIER:
+            return "BLOCKED_BARRIER";
+        case ThreadStatus::BLOCKED_COND:
+            return "BLOCKED_COND";
+        case ThreadStatus::BLOCKED_JOIN:
+            return "BLOCKED_JOIN";
+        case ThreadStatus::COMPLETED:
+            return "COMPLETED";
+        default:
+            panic("Unexpected Thread Status");
+        }
+    }
 
     using Params = SynchroTraceReplayerParams;
     SynchroTraceReplayer(const Params *p);
@@ -272,44 +312,28 @@ class SynchroTraceReplayer : public MemObject
         }
     };
 
-  private:
-    // XXX: DO NOT CHANGE THE ORDER OF THESE STATUSES
-    enum class ThreadStatus {
-        INACTIVE,
-        ACTIVE,
-        BLOCKED_COMM,
-        BLOCKED_MUTEX,
-        BLOCKED_BARRIER,
-        BLOCKED_COND,
-        BLOCKED_JOIN,
-        COMPLETED,
-        NUM_STATUSES
+    struct ThreadContext
+    {
+        ThreadID threadId;
+        StEventID currEventId;
+        StEventStream evStream;
+        ThreadStatus status;
+
+        ThreadContext(ThreadID threadId,
+                      const std::string& eventDir,
+                      uint32_t blockSizeBytes,
+                      uint64_t memSizeBytes)
+          : threadId{threadId},
+            currEventId{0},
+            evStream{static_cast<ThreadID>(threadId+1),
+                     eventDir,
+                     blockSizeBytes,
+                     memSizeBytes},
+            status{ThreadStatus::INACTIVE}
+        {}
     };
 
-    const char* toString(ThreadStatus status)
-    {
-        switch (status) {
-        case ThreadStatus::INACTIVE:
-            return "INACTIVE";
-        case ThreadStatus::ACTIVE:
-            return "ACTIVE";
-        case ThreadStatus::BLOCKED_COMM:
-            return "BLOCKED_COMM";
-        case ThreadStatus::BLOCKED_MUTEX:
-            return "BLOCKED_MUTEX";
-        case ThreadStatus::BLOCKED_BARRIER:
-            return "BLOCKED_BARRIER";
-        case ThreadStatus::BLOCKED_COND:
-            return "BLOCKED_COND";
-        case ThreadStatus::BLOCKED_JOIN:
-            return "BLOCKED_JOIN";
-        case ThreadStatus::COMPLETED:
-            return "COMPLETED";
-        default:
-            panic("Unexpected Thread Status");
-        }
-    }
-
+  private:
     /**
      * Replay each event type.
      *
@@ -317,14 +341,10 @@ class SynchroTraceReplayer : public MemObject
      * completed or not (e.g. if the event is blocked).
      * Otherwise, the event unconditionally completes.
      */
-    void replayCompute(
-        StEventStream& evStream, CoreID coreId, ThreadID threadId);
-    void replayMemory(
-        StEventStream& evStream, CoreID coreId, ThreadID threadId);
-    void replayComm(
-        StEventStream& evStream, CoreID coreId, ThreadID threadId);
-    void replayThreadAPI(
-        StEventStream& evStream, CoreID coreId, ThreadID threadId);
+    void replayCompute(ThreadContext& tcxt, CoreID coreId);
+    void replayMemory(ThreadContext& tcxt, CoreID coreId);
+    void replayComm(ThreadContext& tcxt, CoreID coreId);
+    void replayThreadAPI(ThreadContext& tcxt, CoreID coreId);
 
     /**
      * Try swapping the running (head) thread within a core.
@@ -458,20 +478,6 @@ class SynchroTraceReplayer : public MemObject
     /** Memory Size in bytes */
     uint64_t memorySizeBytes;
 
-
-    /**************************************************************************
-     * Per-thread data.
-     */
-
-    /** Event streams */
-    std::vector<StEventStream> perThreadEventStreams;
-
-    /** Current event */
-    std::vector<StEventID> perThreadEventIds;
-
-    /** Vector of threads' statuses */
-    std::vector<ThreadStatus> perThreadStatus;
-
     /**************************************************************************
      * Per-core data.
      */
@@ -486,7 +492,9 @@ class SynchroTraceReplayer : public MemObject
      *
      * The front of each core's thread queue is the current running thread.
      */
-    std::vector<std::deque<ThreadID>> coreToThreadMap;
+    std::vector<ThreadContext> threadContexts;
+    std::vector<std::deque<std::reference_wrapper<ThreadContext>>>
+        coreToThreadMap;
 
     /**************************************************************************
      * Synchronization state

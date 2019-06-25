@@ -81,9 +81,6 @@ SynchroTraceReplayer::SynchroTraceReplayer(const Params *p)
     blockSizeBits(floorLog2(p->block_size_bytes)),
     memorySizeBytes(p->mem_size_bytes),
     // general per-thread/core state
-    perThreadEventStreams{},
-    perThreadEventIds(p->num_threads),
-    perThreadStatus(p->num_threads, ThreadStatus::INACTIVE),
     coreToThreadMap(p->num_cpus),
     // synchronization state
     pthMetadata(p->event_dir),
@@ -138,8 +135,11 @@ SynchroTraceReplayer::init()
 
     // Currently map threads in a simple round robin fashion on cores.
     // The first thread ID on a core (front) is the currently active thread.
-    for (int i = 0; i < numThreads; i++)
-        coreToThreadMap.at(threadToCore(i)).push_back(i);
+    for (ThreadID i = 0; i < numThreads; i++)
+        threadContexts.emplace_back(
+            i, eventDir, blockSizeBytes, memorySizeBytes);
+    for (auto& tcxt : threadContexts)
+        coreToThreadMap.at(threadIdToCoreId(tcxt.threadId)).emplace_back(tcxt);
 
     // Initialize synchronization statistics
     workerThreadCount = 0;
@@ -148,21 +148,15 @@ SynchroTraceReplayer::init()
     hourCounter = std::time(NULL);
     roiFlag = false;
 
-    // Create trace streams for each event thread
-    for (ThreadID tid = 0; tid < numThreads; tid++)
-        perThreadEventStreams.emplace_back(
-            tid+1, eventDir, blockSizeBytes, memorySizeBytes);
-
-    // Set master thread as active
-    perThreadStatus[0] = ThreadStatus::ACTIVE;
+    // Set master thread as active.
+    // Schedule first tick of the initial core
+    // (the other cores begin 'inactive', and
+    //  expect the master thread to start them)
+    threadContexts[0].status = ThreadStatus::ACTIVE;
+    schedule(coreEvents[0], clockPeriod());
 
     // Schedule first tick of master simulator thread
     schedule(synchroTraceMonitorEvent, 1);
-
-    // Schedule first tick of the initial core
-    // (the other cores begin 'inactive', and
-    //  expect the initial thread to start them)
-    schedule(coreEvents[0], clockPeriod());
 
     // Schedule the logging event, if enabled
     if (DTRACE(STIntervalPrint))
@@ -186,9 +180,9 @@ void
 SynchroTraceReplayer::wakeupMonitor()
 {
     // Terminates the simulation if all the threads are done
-    if (std::all_of(perThreadStatus.cbegin(), perThreadStatus.cend(),
-                    [](ThreadStatus status) {
-                        return status == ThreadStatus::COMPLETED;
+    if (std::all_of(threadContexts.cbegin(), threadContexts.cend(),
+                    [](const ThreadContext& cxt) {
+                        return cxt.status == ThreadStatus::COMPLETED;
                     }))
         exitSimLoop("SynchroTrace completed");
 
@@ -198,8 +192,8 @@ SynchroTraceReplayer::wakeupMonitor()
     {
         hourCounter = std::time(NULL);
         DPRINTFN("%s", std::ctime(&hourCounter));
-        for (int i = 0; i < numThreads; i++)
-            DPRINTFN("Thread<%d>:Event<%d>\n", i, perThreadEventIds[i]);
+        for (const auto& cxt : threadContexts)
+            DPRINTFN("Thread<%d>:Event<%d>\n", cxt.threadId, cxt.currEventId);
     }
 
     // Reschedule self
@@ -210,15 +204,17 @@ SynchroTraceReplayer::wakeupMonitor()
 void
 SynchroTraceReplayer::wakeupDebugLog()
 {
-    for (int i = 0; i < numThreads; i++)
+    for (const auto& cxt : threadContexts)
         DPRINTFN("Thread<%d>:Event<%d>:Status<%s>\n",
-                 i,
-                 perThreadEventIds[i],
-                 toString(perThreadStatus[i]));
+                 cxt.threadId,
+                 cxt.currEventId,
+                 toString(cxt.status));
 
     for (int i = 0; i < numCpus; i++)
         if (i < numThreads)
-            DPRINTFN("Core<%d>:Thread<%d>\n", i, coreToThreadMap[i][0]);
+            DPRINTFN("Core<%d>:Thread<%d>\n",
+                     i,
+                     coreToThreadMap[i].front().get().threadId);
         else
             DPRINTFN("Core<%d>:EMPTY\n", i);
 
@@ -258,91 +254,93 @@ SynchroTraceReplayer::wakeupCore(CoreID coreId)
     //
     // MDL20190618 could refactor into a cleaner state machine.
 
-    const ThreadID currThreadId = {coreToThreadMap[coreId].front()};
-    panic_if(perThreadStatus[currThreadId] == ThreadStatus::INACTIVE ||
-             perThreadStatus[currThreadId] == ThreadStatus::COMPLETED,
+    ThreadContext& tcxt = coreToThreadMap[coreId].front();
+    panic_if(tcxt.status == ThreadStatus::INACTIVE ||
+             tcxt.status == ThreadStatus::COMPLETED,
              "Trying to run Thread %d with status %s",
-             currThreadId, toString(perThreadStatus[currThreadId]));
+             tcxt.threadId, toString(tcxt.status));
 
-    StEventStream& evStream = perThreadEventStreams[currThreadId];
-    switch (evStream.peek().tag)
+    switch (tcxt.evStream.peek().tag)
     {
     /** Replay events */
     case StEvent::Tag::COMPUTE:
-        replayCompute(evStream, coreId, currThreadId);
+        replayCompute(tcxt, coreId);
         break;
     case StEvent::Tag::MEMORY:
-        replayMemory(evStream, coreId, currThreadId);
+        replayMemory(tcxt, coreId);
         break;
     case StEvent::Tag::MEMORY_COMM:
-        replayComm(evStream, coreId, currThreadId);
+        replayComm(tcxt, coreId);
         break;
     case StEvent::Tag::THREAD_API:
-        replayThreadAPI(evStream, coreId, currThreadId);
+        replayThreadAPI(tcxt, coreId);
         break;
 
     /** Meta events */
     case StEvent::Tag::TRACE_EVENT_MARKER:
         // a simple metadata marker; reschedule the next actual event
         DPRINTF(STEventPrint, "Started %d, %d\n",
-                currThreadId, evStream.peek().traceEventMarker.eventId);
-        assert(perThreadEventIds[currThreadId] ==
-               evStream.peek().traceEventMarker.eventId);
-        perThreadEventIds[currThreadId]++;  // increment after, starts at 0
+                tcxt.threadId,
+                tcxt.evStream.peek().traceEventMarker.eventId);
+        assert(tcxt.currEventId ==
+               tcxt.evStream.peek().traceEventMarker.eventId);
+        tcxt.currEventId++;  // increment after, starts at 0
         schedule(coreEvents[coreId], curTick());
-        evStream.pop();
+        tcxt.evStream.pop();
         break;
     case StEvent::Tag::INSN_MARKER:
         // a simple metadata marker; reschedule the next actual event
         // TODO(now) track stats
         schedule(coreEvents[coreId], curTick());
-        evStream.pop();
+        tcxt.evStream.pop();
         break;
     case StEvent::Tag::END_OF_EVENTS:
-        perThreadStatus[currThreadId] = ThreadStatus::COMPLETED;
-        evStream.pop();
+        tcxt.status = ThreadStatus::COMPLETED;
+        tcxt.evStream.pop();
         break;
     default:
-        panic("Unexpected event encountered!");
+        panic("unexpected event encountered: "
+              "Thread<%d>:Event<%d>:Tag<%d>",
+              tcxt.threadId,
+              tcxt.currEventId,
+              static_cast<std::underlying_type<StEvent::Tag>::type>
+              (tcxt.evStream.peek().tag));
     }
 }
 
 void
-SynchroTraceReplayer::replayCompute(
-    StEventStream& evStream, CoreID coreId, ThreadID threadId)
+SynchroTraceReplayer::replayCompute(ThreadContext& tcxt, CoreID coreId)
 {
-    assert(evStream.peek().tag == StEvent::Tag::COMPUTE);
+    assert(tcxt.evStream.peek().tag == StEvent::Tag::COMPUTE);
 
     // simulate time for the iops/flops
-    const ComputeOps& ops = evStream.peek().computeOps;
+    const ComputeOps& ops = tcxt.evStream.peek().computeOps;
     schedule(coreEvents[coreId],
              curTick() + clockPeriod() +
              (clockPeriod() * (Cycles(CPI_IOPS * ops.iops) +
                                Cycles(CPI_FLOPS * ops.flops))));
-    evStream.pop();
+    tcxt.evStream.pop();
 }
 
 void
-SynchroTraceReplayer::replayMemory(
-    StEventStream& evStream, CoreID coreId, ThreadID threadId)
+SynchroTraceReplayer::replayMemory(ThreadContext& tcxt, CoreID coreId)
 {
-    assert(evStream.peek().tag == StEvent::Tag::MEMORY);
+    assert(tcxt.evStream.peek().tag == StEvent::Tag::MEMORY);
 
     // Send LD/ST for computation events
-    const StEvent& ev = evStream.peek();
+    const StEvent& ev = tcxt.evStream.peek();
     msgReqSend(coreId,
                ev.memoryReq.addr,
                ev.memoryReq.bytesRequested,
                ev.memoryReq.type);
-    evStream.pop();
+    tcxt.evStream.pop();
     // Do not reschedule wakeup; will wakeup again on the timing response.
 }
 
 void
-SynchroTraceReplayer::replayComm(
-    StEventStream& evStream, CoreID coreId, ThreadID threadId)
+SynchroTraceReplayer::replayComm(ThreadContext& tcxt, CoreID coreId)
 {
-    assert(evStream.peek().tag == StEvent::Tag::MEMORY_COMM);
+    assert(tcxt.evStream.peek().tag == StEvent::Tag::MEMORY_COMM);
 
     // Check if communication dependencies have been met.
     //
@@ -351,29 +349,28 @@ SynchroTraceReplayer::replayComm(
     // synchronization, and we do not want to maintain false
     // dependencies.
 
-    const StEvent& ev = evStream.peek();
+    const StEvent& ev = tcxt.evStream.peek();
     if (pcSkip ||
         (isCommDependencyBlocked(ev.memoryReqComm) ||
-         !perThreadLocksHeld[threadId].empty()))
+         !perThreadLocksHeld[tcxt.threadId].empty()))
     {
         // If dependencies have been met, trigger the read reqeust.
         msgReqSend(coreId,
                    ev.memoryReqComm.addr,
                    ev.memoryReqComm.bytesRequested,
                    ReqType::REQ_READ);
-        evStream.pop();
+        tcxt.evStream.pop();
         // Do not reschedule wakeup; will wakeup again on the timing response.
     }
     else
     {
-        perThreadStatus[threadId] = ThreadStatus::BLOCKED_COMM;
+        tcxt.status = ThreadStatus::BLOCKED_COMM;
         tryCxtSwapAndSchedule(coreId);
     }
 }
 
 void
-SynchroTraceReplayer::replayThreadAPI(
-    StEventStream& evStream, CoreID coreId, ThreadID threadId)
+SynchroTraceReplayer::replayThreadAPI(ThreadContext& tcxt, CoreID coreId)
 {
     // This is the most complex replay function as it handles the most state
     // transitions within the system, and does several sanity checks to make
@@ -384,8 +381,8 @@ SynchroTraceReplayer::replayThreadAPI(
     // and swapping threads to each event case.
     // This is to make future modification more accessible.
 
-    assert(evStream.peek().tag == StEvent::Tag::THREAD_API);
-    const StEvent& ev = evStream.peek();
+    assert(tcxt.evStream.peek().tag == StEvent::Tag::THREAD_API);
+    const StEvent& ev = tcxt.evStream.peek();
     const Addr pthAddr = ev.threadApi.pthAddr;
 
     switch (ev.threadApi.eventType)
@@ -396,22 +393,22 @@ SynchroTraceReplayer::replayThreadAPI(
         auto p = mutexLocks.insert(pthAddr);
         if (p.second)
         {
-            perThreadStatus[threadId] = ThreadStatus::ACTIVE;
-            perThreadLocksHeld[threadId].push_back(pthAddr);
+            tcxt.status = ThreadStatus::ACTIVE;
+            perThreadLocksHeld[tcxt.threadId].push_back(pthAddr);
             DPRINTF(STMutexLogger,
                     "Thread %d locked mutex <0x%X>",
-                    threadId,
+                    tcxt.threadId,
                     pthAddr);
-            evStream.pop();
+            tcxt.evStream.pop();
             schedule(coreEvents[coreId],
                      curTick() + clockPeriod() * Cycles(pthTicks));
         }
         else
         {
-            perThreadStatus[threadId] = ThreadStatus::BLOCKED_MUTEX;
+            tcxt.status = ThreadStatus::BLOCKED_MUTEX;
             DPRINTF(STMutexLogger,
                     "Thread %d blocked trying to lock mutex <0x%X>",
-                    threadId,
+                    tcxt.threadId,
                     pthAddr);
             tryCxtSwapAndSchedule(coreId);
         }
@@ -419,23 +416,23 @@ SynchroTraceReplayer::replayThreadAPI(
         break;
     case ThreadApi::EventType::MUTEX_UNLOCK:
     {
-        std::vector<Addr>& locksHeld = perThreadLocksHeld[threadId];
+        std::vector<Addr>& locksHeld = perThreadLocksHeld[tcxt.threadId];
         auto s_it = mutexLocks.find(pthAddr);
         auto v_it = std::find(locksHeld.begin(), locksHeld.end(), pthAddr);
 
         fatal_if(s_it == mutexLocks.end(),
                  "Thread %d tried to unlock mutex <0x%X> before having lock!",
-                 threadId,
+                 tcxt.threadId,
                  pthAddr);
         fatal_if(v_it == locksHeld.end(),
                  "Thread %d tried to unlock mutex <0x%X> "
                  "but a different thread holds the lock!",
-                 threadId,
+                 tcxt.threadId,
                  pthAddr);
 
         mutexLocks.erase(s_it);
         locksHeld.erase(v_it);
-        evStream.pop();
+        tcxt.evStream.pop();
         schedule(coreEvents[coreId],
                  curTick() + clockPeriod() * Cycles(pthTicks));
     }
@@ -444,9 +441,9 @@ SynchroTraceReplayer::replayThreadAPI(
     // Thread Spawn/Join
     case ThreadApi::EventType::THREAD_CREATE:
     {
-        panic_if(perThreadStatus[threadId] != ThreadStatus::ACTIVE,
+        panic_if(tcxt.status != ThreadStatus::ACTIVE,
                  "Thread %d is creating other threads but isn't event ACTIVE!",
-                 threadId);
+                 tcxt.threadId);
 
         if (!roiFlag)
         {
@@ -464,17 +461,17 @@ SynchroTraceReplayer::replayThreadAPI(
         const ThreadID serfThreadId =
             {pthMetadata.addressToIdMap().at(pthAddr)};
 
-        fatal_if(perThreadStatus[serfThreadId] != ThreadStatus::INACTIVE,
+        panic_if(threadContexts[serfThreadId].status != ThreadStatus::INACTIVE,
                  "Tried to create Thread %d, but it already exists!",
                  serfThreadId);
-        perThreadStatus[serfThreadId] = ThreadStatus::ACTIVE;
 
         // wake up core (only core 0 is initially working)
-        const CoreID serfCoreId = {threadToCore(serfThreadId)};
+        threadContexts[serfThreadId].status = ThreadStatus::ACTIVE;
+        const CoreID serfCoreId = {threadIdToCoreId(serfThreadId)};
         schedule(coreEvents[serfCoreId], curTick() + clockPeriod());
 
         DPRINTF(STDebug, "Thread %d created", serfThreadId);
-        evStream.pop();
+        tcxt.evStream.pop();
         schedule(coreEvents[coreId],
                  curTick() + clockPeriod() * Cycles(pthTicks));
     }
@@ -485,18 +482,18 @@ SynchroTraceReplayer::replayThreadAPI(
             {pthMetadata.addressToIdMap().at(pthAddr)};
 
         const ThreadStatus serfStatus =
-            {perThreadStatus[serfThreadId]};
+            {threadContexts[serfThreadId].status};
 
         switch (serfStatus)
         {
         case ThreadStatus::COMPLETED:
             // reset to active, in case this thread was previously blocked
-            perThreadStatus[threadId] = ThreadStatus::ACTIVE;
+            tcxt.status = ThreadStatus::ACTIVE;
             workerThreadCount--;
             DPRINTF(STDebug, "Thread %d joined", serfThreadId);
             if (DTRACE(ROI) && !workerThreadCount)
                 DPRINTFN("Last thread joined!");
-            evStream.pop();
+            tcxt.evStream.pop();
             schedule(coreEvents[coreId],
                      curTick() + clockPeriod() * Cycles(pthTicks));
             break;
@@ -506,14 +503,14 @@ SynchroTraceReplayer::replayThreadAPI(
         case ThreadStatus::BLOCKED_BARRIER:
         case ThreadStatus::BLOCKED_COND:
         case ThreadStatus::BLOCKED_JOIN:
-            perThreadStatus[threadId] = ThreadStatus::BLOCKED_JOIN;
+            tcxt.status = ThreadStatus::BLOCKED_JOIN;
             DPRINTF(STDebug,
                     "Thread %d on Core %d blocked trying to join Thread %d"
                     " with status: %s",
-                    threadId,
+                    tcxt.threadId,
                     coreId,
                     serfThreadId,
-                    toString(perThreadStatus[serfThreadId]));
+                    toString(threadContexts[serfThreadId].status));
             tryCxtSwapAndSchedule(coreId);
             break;
         case ThreadStatus::INACTIVE:
@@ -530,9 +527,9 @@ SynchroTraceReplayer::replayThreadAPI(
     // Barriers
     case ThreadApi::EventType::BARRIER_WAIT:
     {
-        auto p = threadBarrierMap[pthAddr].insert(threadId);
+        auto p = threadBarrierMap[pthAddr].insert(tcxt.threadId);
         fatal_if(p.second, "Thread %d already waiting in barrier <0x%X>",
-                 threadId,
+                 tcxt.threadId,
                  pthAddr);
 
         // Check if this is the last thread to enter the barrier,
@@ -547,19 +544,19 @@ SynchroTraceReplayer::replayThreadAPI(
                 //
                 // Expect this thread to be in the list of threads being
                 // reactivated
-                perThreadStatus[tid] = ThreadStatus::ACTIVE;
+                threadContexts[tid].status = ThreadStatus::ACTIVE;
             }
             // clear the barrier
             fatal_if(threadBarrierMap.erase(pthAddr) != 1,
                      "Tried to clear barrier that doesn't exist! <0x%X>",
                      pthAddr);
-            evStream.pop();
+            tcxt.evStream.pop();
             schedule(coreEvents[coreId],
                      curTick() + clockPeriod() * Cycles(pthTicks));
         }
         else
         {
-            perThreadStatus[threadId] = ThreadStatus::BLOCKED_BARRIER;
+            tcxt.status = ThreadStatus::BLOCKED_BARRIER;
             tryCxtSwapAndSchedule(coreId);
         }
     }
@@ -591,22 +588,22 @@ SynchroTraceReplayer::replayThreadAPI(
         const size_t erased = mutexLocks.erase(mtx);
         fatal_if(erased != 1,
                  "Thread %d tried to wait before holding mutex: <0x%X>",
-                 threadId,
+                 tcxt.threadId,
                  mtx);
 
-        auto it = condSignals[threadId].find(pthAddr);
-        if (it != condSignals[threadId].end() && it->second > 0)
+        auto it = condSignals[tcxt.threadId].find(pthAddr);
+        if (it != condSignals[tcxt.threadId].end() && it->second > 0)
         {
             // decrement signal and reactivate thread
             it->second--;
-            perThreadStatus[threadId] = ThreadStatus::ACTIVE;
-            evStream.pop();
+            tcxt.status = ThreadStatus::ACTIVE;
+            tcxt.evStream.pop();
             schedule(coreEvents[coreId],
                      curTick() + clockPeriod() * Cycles(pthTicks));
         }
         else
         {
-            perThreadStatus[threadId] = ThreadStatus::BLOCKED_COND;
+            tcxt.status = ThreadStatus::BLOCKED_COND;
             tryCxtSwapAndSchedule(coreId);
         }
     }
@@ -614,10 +611,10 @@ SynchroTraceReplayer::replayThreadAPI(
     case ThreadApi::EventType::COND_SG:
     case ThreadApi::EventType::COND_BR:
     {
-        panic_if(perThreadStatus[threadId] != ThreadStatus::ACTIVE,
+        panic_if(tcxt.status != ThreadStatus::ACTIVE,
                  "Thread %d is signaling/broadcasting, "
                  "but isn't event ACTIVE!",
-                 threadId);
+                 tcxt.threadId);
         // post condition signal to all threads
         for (ThreadID tid = 0; tid < numThreads; tid++)
         {
@@ -626,7 +623,7 @@ SynchroTraceReplayer::replayThreadAPI(
             // mapped_type (Addr) will default to `0`.
             condSignals[tid][pthAddr]++;
         }
-        evStream.pop();
+        tcxt.evStream.pop();
         schedule(coreEvents[coreId],
                  curTick() + clockPeriod() * Cycles(pthTicks));
     }
@@ -637,12 +634,12 @@ SynchroTraceReplayer::replayThreadAPI(
     // However, an event is not necessarily completed.
     case ThreadApi::EventType::SPIN_LOCK:
     {
-        panic_if(perThreadStatus[threadId] != ThreadStatus::ACTIVE,
+        panic_if(tcxt.status != ThreadStatus::ACTIVE,
                  "Thread %d is spinlocking, but isn't event ACTIVE!",
-                 threadId);
+                 tcxt.threadId);
         auto p = spinLocks.insert(pthAddr);
         if (p.second)
-            evStream.pop();
+            tcxt.evStream.pop();
 
         // Reschedule regardless of whether the lock was acquired.
         // If the lock wasn't acquired, we spin and try again the next cycle.
@@ -652,19 +649,19 @@ SynchroTraceReplayer::replayThreadAPI(
         break;
     case ThreadApi::EventType::SPIN_UNLOCK:
     {
-        panic_if(perThreadStatus[threadId] != ThreadStatus::ACTIVE,
+        panic_if(tcxt.status != ThreadStatus::ACTIVE,
                  "Thread %d is spinunlocking, but isn't event ACTIVE!",
-                 threadId);
+                 tcxt.threadId);
         auto it = spinLocks.find(pthAddr);
         fatal_if(it == spinLocks.end(),
                  "Thread %d is unlocking spinlock <0x%X>, "
                  "but it isn't even locked!",
-                 threadId,
+                 tcxt.threadId,
                  pthAddr);
         // TODO(someday) check that THIS thread holds the lock, and not some
         // other thread
         spinLocks.erase(it);
-        evStream.pop();
+        tcxt.evStream.pop();
         schedule(coreEvents[coreId],
                  curTick() + clockPeriod() * Cycles(pthTicks));
     }
@@ -732,14 +729,14 @@ void SynchroTraceReplayer::msgReqSend(CoreID coreId,
                 " Core<%d>:Thread<%d>:Event<%d>:Addr<0x%x>\n",
                 curTick(),
                 coreId,
-                coreToThreadMap[coreId][0],
-                perThreadEventIds[coreToThreadMap[coreId][0]],
+                coreToThreadMap[coreId].front().get().threadId,
+                coreToThreadMap[coreId].front().get().currEventId,
                 addr);
     } else {
         warn("%d: Packet did not issue from CoreID: %d, ThreadID: %d",
              curTick(),
              coreId,
-             coreToThreadMap[coreId][0]);
+             coreToThreadMap[coreId].front().get().threadId);
         // If the packet did not issue, delete it and create a new one upon
         // reissue. Cannot reuse it because it's created with the current
         // system state.
@@ -750,8 +747,8 @@ void SynchroTraceReplayer::msgReqSend(CoreID coreId,
         fatal("Unexpected Timing Request failed for "
               "Core: %d; Thread: %d; Event: %zu\n",
               coreId,
-              coreToThreadMap[coreId][0],
-              perThreadEventIds[coreToThreadMap[coreId][0]]);
+              coreToThreadMap[coreId].front().get().threadId,
+              coreToThreadMap[coreId].front().get().currEventId);
     }
 }
 
@@ -776,7 +773,8 @@ SynchroTraceReplayer::isCommDependencyBlocked(
 {
     // If the producer thread's EventID is greater than the dependent event
     // then the dependency is satisfied
-    return perThreadEventIds[comm.sourceThreadId] > comm.sourceEventId;
+    return (threadContexts[comm.sourceThreadId].currEventId >
+            comm.sourceEventId);
 }
 
 void
@@ -790,14 +788,15 @@ SynchroTraceReplayer::tryCxtSwapAndSchedule(CoreID coreId)
     // MDL20190619 How much different do we want to handle communication event
     // blocks?
 
-    std::deque<ThreadID>& threadsOnCore = coreToThreadMap[coreId];
+    auto& threadsOnCore = coreToThreadMap[coreId];
     assert(threadsOnCore.size() > 0);
 
     auto it = threadsOnCore.begin();
     while (++it != threadsOnCore.cend())
     {
-        if (perThreadStatus[*it] != ThreadStatus::INACTIVE &&
-            perThreadStatus[*it] != ThreadStatus::COMPLETED)
+        const ThreadContext& tcxt = *it;
+        if (tcxt.status != ThreadStatus::INACTIVE &&
+            tcxt.status != ThreadStatus::COMPLETED)
             break;
     }
 
