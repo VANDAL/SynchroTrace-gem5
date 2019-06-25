@@ -458,10 +458,16 @@ SynchroTraceReplayer::replayThreadAPI(ThreadContext& tcxt, CoreID coreId)
                  "could not find pthread thread id in "
                  "sigil.pthread.out file: %d\n"
                  "Are the traces and pthread file in sync?", pthAddr);
+
         const ThreadID serfThreadId =
             {pthMetadata.addressToIdMap().at(pthAddr)};
 
-        panic_if(threadContexts[serfThreadId].status != ThreadStatus::INACTIVE,
+        fatal_if(serfThreadId >= threadContexts.size(),
+                 "Tried to create Thread %d, "
+                 "but simulation is configured with %d threads!",
+                 serfThreadId,
+                 numThreads);
+        fatal_if(threadContexts[serfThreadId].status != ThreadStatus::INACTIVE,
                  "Tried to create Thread %d, but it already exists!",
                  serfThreadId);
 
