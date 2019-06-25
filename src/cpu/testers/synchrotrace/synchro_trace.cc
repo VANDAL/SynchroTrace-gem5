@@ -100,10 +100,10 @@ SynchroTraceReplayer::SynchroTraceReplayer(const Params *p)
     // should be set in the init routine. Only variables that depend on
     // input parameters should be set here in the constructor.
     //
-    // In contrast, some member MUST be set in the constructor
+    // In contrast, some members MUST be set in the constructor
     // because they are needed BEFORE `init` gets to run.
     // Namely, the ports need to be generated, as gem5 uses
-    // them when connected up SimObjects (before `init`ing).
+    // them when connecting up SimObjects (before `init`ing).
 
     fatal_if(p->num_cpus > std::numeric_limits<CoreID>::max(),
              "cannot support %d cpus", p->num_cpus);
@@ -111,7 +111,7 @@ SynchroTraceReplayer::SynchroTraceReplayer(const Params *p)
              "number of cpus expected to be power of 2, but got %d",
              numCpus);
 
-    // Initialize the SynchroTrace to Memory ports
+    // Initialize the ports to the rest of the system
     for (CoreID i = 0; i < numCpus; i++)
         ports.emplace_back(csprintf("%s-port%d", name(), i), *this, i);
 }
@@ -129,33 +129,33 @@ SynchroTraceReplayer::init()
              "cache block size expected to be power of 2, but got: %d",
              blockSizeBytes);
 
-    // Initialize gem5 event per core
+    // Initialize the events that will simulate time for each core
+    // via sleeps/wakeups (scheduling a wakeup after N cycles).
     for (int i = 0; i < numContexts; i++)
         coreEvents.emplace_back(*this, i);
 
     // Currently map threads in a simple round robin fashion on cores.
-    // The first thread ID on a core (front) is the currently active thread.
+    // The first thread context on a core (front) is the active thread.
     for (ThreadID i = 0; i < numThreads; i++)
         threadContexts.emplace_back(
             i, eventDir, blockSizeBytes, memorySizeBytes);
     for (auto& tcxt : threadContexts)
         coreToThreadMap.at(threadIdToCoreId(tcxt.threadId)).emplace_back(tcxt);
 
-    // Initialize synchronization statistics
+    // Initialize statistics
     workerThreadCount = 0;
-
-    // Initialize stats
     hourCounter = std::time(NULL);
     roiFlag = false;
 
-    // Set master thread as active.
-    // Schedule first tick of the initial core
+    // Set master (first) thread as active.
+    // Schedule first tick of the initial core.
     // (the other cores begin 'inactive', and
     //  expect the master thread to start them)
     threadContexts[0].status = ThreadStatus::ACTIVE;
     schedule(coreEvents[0], clockPeriod());
 
-    // Schedule first tick of master simulator thread
+    // Schedule the monitor event to start and regularly
+    // check the status of the replay system.
     schedule(synchroTraceMonitorEvent, 1);
 
     // Schedule the logging event, if enabled
@@ -232,9 +232,7 @@ void
 SynchroTraceReplayer::wakeupCore(CoreID coreId)
 {
     // Each time a core wakes up:
-    // - Finds the current running thread (returns immediately if no threads
-    //   available)
-    // - Gets the next event and processes it:
+    // - Gets the next event for the active thread and processes it:
     //   - COMPUTE: Simulate compute time by sleeping for a certain amount of
     //              ticks.
     //   - MEMORY: Send a detailed memory access timing request through the
@@ -251,8 +249,6 @@ SynchroTraceReplayer::wakeupCore(CoreID coreId)
     //   - rescheduling the core (and implicitly its current thread)
     //     to process the next event
     //   - swapping any blocked threads
-    //
-    // MDL20190618 could refactor into a cleaner state machine.
 
     ThreadContext& tcxt = coreToThreadMap[coreId].front();
     panic_if(tcxt.status == ThreadStatus::INACTIVE ||
@@ -328,7 +324,7 @@ SynchroTraceReplayer::replayMemory(ThreadContext& tcxt, CoreID coreId)
 {
     assert(tcxt.evStream.peek().tag == StEvent::Tag::MEMORY);
 
-    // Send LD/ST for computation events
+    // Send the load/store
     const StEvent& ev = tcxt.evStream.peek();
     msgReqSend(coreId,
                ev.memoryReq.addr,
@@ -376,11 +372,8 @@ SynchroTraceReplayer::replayThreadAPI(ThreadContext& tcxt, CoreID coreId)
     // This is the most complex replay function as it handles the most state
     // transitions within the system, and does several sanity checks to make
     // sure threads have been replayed in a sensible way.
-    //
-    // N.B. Rather than create a complex state machine architecture, we instead
-    // simply give responsibility for popping events, rescheduling,
-    // and swapping threads to each event case.
-    // This is to make future modification more accessible.
+    // Each case is responsible for popping events, rescheduling,
+    // and swapping threads appropriately.
 
     assert(tcxt.evStream.peek().tag == StEvent::Tag::THREAD_API);
     const StEvent& ev = tcxt.evStream.peek();
@@ -718,14 +711,11 @@ void SynchroTraceReplayer::msgReqSend(CoreID coreId,
     //   memory system,
     // - and because we only thinly model a simple 1-CPI CPU.
     //
-    // N.B. the address is most likely a (modified-to-be-valid)
-    // virtual memory address.
-    // SynchroTrace doesn't model a TLB for simulation speed-up at the cost of
-    // some accuracy.
+    // N.B. the address is most likely a (modified-to-be-valid) virtual memory
+    // address. SynchroTrace doesn't model a TLB, for simulation speed-up, at
+    // the cost of some accuracy.
     RequestPtr req = std::make_shared<Request>(
         addr, bytes, Request::Flags{}, masterID);
-
-    // MDL20190615 what is contextId used for?
     req->setContext(coreId);
 
     // Create the request packet that will be sent through the memory system.
