@@ -297,6 +297,7 @@ SynchroTraceReplayer::wakeupCore(CoreID coreId)
     case StEvent::Tag::END_OF_EVENTS:
         tcxt.status = ThreadStatus::COMPLETED;
         tcxt.evStream.pop();
+        tryCxtSwapAndSchedule(coreId);
         break;
     default:
         panic("unexpected event encountered: "
@@ -825,7 +826,8 @@ SynchroTraceReplayer::tryCxtSwapAndSchedule(CoreID coreId)
         schedule(coreEvents[coreId],
                  curTick() + clockPeriod() * Cycles(cxtSwitchTicks));
     }
-    else
+    else if (threadsOnCore.front().get().status != ThreadStatus::COMPLETED &&
+             threadsOnCore.front().get().status != ThreadStatus::INACTIVE)
     {
         // No thread available to run, reschedule the current thread to try
         // running again the next cycle.
