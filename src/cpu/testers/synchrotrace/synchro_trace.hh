@@ -211,7 +211,7 @@ class SynchroTraceReplayer : public MemObject
         NUM_STATUSES
     };
 
-    const char* toString(ThreadStatus status)
+    const char* toString(ThreadStatus status) const
     {
         switch (status) {
         case ThreadStatus::INACTIVE:
@@ -342,29 +342,6 @@ class SynchroTraceReplayer : public MemObject
     void replayComm(ThreadContext& tcxt, CoreID coreId);
     void replayThreadAPI(ThreadContext& tcxt, CoreID coreId);
 
-    /**
-     * Try swapping the running (head) thread within a core.
-     * It's not an error if swapping is not possible, as another thread in
-     * another core may be holding a required lock.
-     * Deadlock is not detected in this function.
-     */
-    void trySwapThreads(int proc_id);
-
-    /**
-     * Function is called on core wakeups to prevent cores from stalling
-     * when scheduling multiple threads per core.
-     */
-    void swapStalledThreads(int proc_id);
-
-    /**
-     * Handles moving thread from top of thread queue on a core to the
-     * back.
-     */
-    void moveThreadToHead(int proc_id, ThreadID thread_id);
-
-    /** Simulate compute by spinning */
-    void replayCompute(ComputeOps& ops);
-
     /** Send a blocking message request to memory system. */
     void msgReqSend(CoreID coreId, Addr addr, uint32_t bytes, ReqType type);
 
@@ -380,7 +357,13 @@ class SynchroTraceReplayer : public MemObject
      * call.
      */
     bool isCommDependencyBlocked(
-        const MemoryRequest_ThreadCommunication& comm);
+        const MemoryRequest_ThreadCommunication& comm) const
+    {
+        // If the producer thread's EventID is greater than the dependent event
+        // then the dependency is satisfied
+        return (threadContexts[comm.sourceThreadId].currEventId >
+                comm.sourceEventId);
+    }
 
     /**
      * Called when a thread detects it is blocked and cannot proceed to consume
@@ -396,17 +379,7 @@ class SynchroTraceReplayer : public MemObject
      */
     bool tryCxtSwapAndSchedule(CoreID coreId);
 
-    /**
-     * There can be mutiple Producer->Consumer dependencies within an event.
-     * This function calls checkCommDependency(...) for all
-     * producer->consumer dependencies.
-     */
-    bool checkAllCommDependencies(const StEvent& this_event);
-
-    /** Check if all necessary threads are in barrier. */
-    bool checkBarriers(const StEvent& this_event);
-
-    /** Simple helper */
+    /** Simple helper. Threads are statically mapped to cores round-robin */
     CoreID threadIdToCoreId(ThreadID threadId) const
     {
         return threadId % numCpus;

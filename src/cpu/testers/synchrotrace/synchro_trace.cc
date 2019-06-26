@@ -793,16 +793,6 @@ SynchroTraceReplayer::msgRespRecv(CoreID coreId, PacketPtr pkt)
 }
 
 bool
-SynchroTraceReplayer::isCommDependencyBlocked(
-    const MemoryRequest_ThreadCommunication& comm)
-{
-    // If the producer thread's EventID is greater than the dependent event
-    // then the dependency is satisfied
-    return (threadContexts[comm.sourceThreadId].currEventId >
-            comm.sourceEventId);
-}
-
-bool
 SynchroTraceReplayer::tryCxtSwapAndSchedule(CoreID coreId)
 {
     auto& threadsOnCore = coreToThreadMap[coreId];
