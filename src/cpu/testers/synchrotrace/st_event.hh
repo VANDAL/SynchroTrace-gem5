@@ -55,6 +55,7 @@
  * Authors: Karthik Sangaiah
  *          Ankit More
  *          Radhika Jagtap
+ *          Mike Lui
  *
  * Defines an event in the queue for synchronization and event-based
  * dependency tracking
@@ -64,137 +65,67 @@
 #define __CPU_TESTERS_SYNCHROTRACE_STEVENT_HH__
 
 #include <cstdlib>
+#include <random>
 
 #include "sim/system.hh"
 
+using StEventID = std::size_t;
+constexpr StEventID InvalidEventID = std::numeric_limits<StEventID>::max();
+
+/** Read/Write */
+enum class ReqType: uint8_t {
+    REQ_READ,
+    REQ_WRITE
+};
+
 /**
- * This struct contains the memory access information needed to create a
- * request.
+ * A memory request for the SynchroTrace...TODO documentation
  */
-struct MemAddrInfo {
-
-    /** Thread ID corresponding to the trace used to generate this request */
-    ThreadID reqThreadID;
-
-    /** Event ID for the sub event that this request is linked to */
-    unsigned long reqEventID;
-
+struct MemoryRequest {
     /** Physical address */
     Addr addr;
 
-    /** Size of the request in bytes */
-    unsigned int numBytes;
+    /** Size of the request starting at the address */
+    uint32_t bytesRequested;
 
-    /** Constructors */
-    MemAddrInfo() { }
-
-    MemAddrInfo(ThreadID thread_id, unsigned long event_id,
-                Addr addr, unsigned int num_bytes)
-      : reqThreadID(thread_id),
-        reqEventID(event_id),
-        addr(addr),
-        numBytes(num_bytes)
-    { }
-
-    MemAddrInfo(Addr addr, unsigned int num_bytes)
-      : reqThreadID(-1),
-        reqEventID(-1),
-        addr(addr),
-        numBytes(num_bytes)
-    { }
+    ReqType type;
 };
 
-/**
- * This struct contains information needed to calculate the timing, e.g.
- * number of integer or floating point operations, and a pointer to the
- * MemAddrInfo.
- */
-struct SubEvent {
 
-    /**
-     * Memory request type for a sub event
-     *
-     * REQ_READ     A read type request
-     * REQ_WRITE    A write type request
-     */
-    enum EventReqType {
-        REQ_READ,
-        REQ_WRITE
-    };
+struct MemoryRequest_ThreadCommunication {
+    /** Physical address */
+    Addr addr;
 
-    /** The number of integer ops that this sub event is broken down into */
-    uint64_t numIOPS;
+    /** Size of the request starting at the address */
+    uint32_t bytesRequested;
 
-    /**
-     * The number of floating point ops that this sub event is broken down
-     * into.
-     */
-    uint64_t numFLOPS;
+    /** Event ID for the sub event that this request is linked to */
+    StEventID sourceEventId;
 
-    /** Whether the request is read or write */
-    EventReqType msgType;
-
-    /** The time at which to send the request */
-    Tick triggerTime;
-
-    /** Set to true when request is sent */
-    bool msgTriggered;
-
-    /** Whether the event has a request associated with it */
-    bool containsMsg;
-
-    /** Pointer to the struct holding request related information */
-    MemAddrInfo *thisMsg;
-
-    /** Constructors */
-    SubEvent() { }
-
-    SubEvent(unsigned long i_ops, unsigned long f_ops,
-             EventReqType req_type, bool req_sent, bool contains_req,
-             MemAddrInfo *req_info_ptr)
-      : numIOPS(i_ops),
-        numFLOPS(f_ops),
-        msgType(req_type),
-        msgTriggered(req_sent),
-        containsMsg(contains_req),
-        thisMsg(req_info_ptr)
-    { }
-
-    SubEvent(unsigned long i_ops, unsigned long f_ops,
-             bool req_sent, bool contains_req)
-      : numIOPS(i_ops),
-        numFLOPS(f_ops),
-        msgTriggered(req_sent),
-        containsMsg(contains_req)
-    { }
+    /** Thread ID corresponding to the trace used to generate this request */
+    ThreadID sourceThreadId;
 };
 
-/**
- * STEvent encapsulates a record in the trace as an event during trace replay
- */
-class STEvent
-{
-  public:
+
+struct ComputeOps {
+    uint32_t iops;
+    uint32_t flops;
+};
+
+struct ThreadApi {
+    /**
+     * Address of the critical variable used in Pthread calls, for e.g. the
+     * mutex lock address, barrier variable address, conditional variable
+     * address, or address of the input variable that holds the thread
+     * information when creating a new thread
+     */
+    Addr pthAddr;
 
     /**
-     * Events have a broad classification which is captured in EventClass
-     *
-     * EVENT_CLASS_NONE Initialisation value
-     *
-     * COMP             Computation event, that is a local read, local write
-     *                  or an integer or floating point operation
-     *
-     * COMM             An event for communication between threads
-     *
-     * THREAD_API       Calls to thread library such as thread creation, join,
-     *                  barriers and locks
+     * Mutex lock address used in conjunction with conditional variable
+     * address set in pthAddr
      */
-    enum EventClass {
-        EVENT_CLASS_NONE,
-        COMP,
-        COMM,
-        THREAD_API
-    };
+    Addr mutexLockAddr;
 
     /**
      * The type within the THREAD_API class of events
@@ -226,7 +157,7 @@ class STEvent
      * SEM_POST         Increment a semaphore
      *
      */
-    enum EventType {
+    enum class EventType {
         INVALID_EVENT = 0,
         MUTEX_LOCK = 1,
         MUTEX_UNLOCK = 2,
@@ -242,128 +173,158 @@ class STEvent
         SEM_WAIT = 12,
         SEM_POST = 13,
         SEM_GETV = 14,
-        SEM_DEST = 15
+        SEM_DEST = 15,
+        NUM_TYPES,
     };
 
-    /** Typedef for the memory address information vector */
-    typedef std::vector<MemAddrInfo *> vectorMemAddr;
-
-    /**
-     * The class of event to specify if the event captures local compute,
-     * inter-thread communication or thread API calls
-     */
-    EventClass eventClass;
-
-    /** To specify the type of thread API call, for e.g. mutex lock */
     EventType eventType;
-
-    /** Unique ID of the event */
-    unsigned long eventID;
-
-    /** Thread ID corresponding to the event */
-    ThreadID evThreadID;
-
-    /**
-     * Addresses which are written by some other thread and read by this thread
-     */
-    vectorMemAddr commPreRequisiteEvents;
-
-    /** Addresses that this event writes which are private to its thread */
-    vectorMemAddr compWriteEvents;
-
-    /** Addresses that this event reads which are provate to its thread */
-    vectorMemAddr compReadEvents;
-
-    /** Number of integer operations */
-    unsigned long compIOPS;
-
-    /** Number of floating point operations */
-    unsigned long compFLOPS;
-
-    /** Number of reads to private memory ie local to event's thread */
-    unsigned long compMemReads;
-
-    /** Number of writes to private memory, ie local to event's thread */
-    unsigned long compMemWrites;
-
-    /** Set to true when sub events are created to handle each operation */
-    bool subEventsCreated;
-
-    /**
-     * Address of the critical variable used in Pthread calls, for e.g. the
-     * mutex lock address, barrier variable address, conditional variable
-     * address, or address of the input variable that holds the thread
-     * information when creating a new thread
-     */
-    Addr pthAddr;
-
-    /**
-     * Mutex lock address used in conjunction with conditional variable
-     * address set in pthAddr
-     */
-    Addr mutexLockAddr;
-
-    /**
-     * A queue of sub events which hold operations that are bundled up in
-     * STEvent
-     */
-    std::deque<SubEvent> *subEventList;
-
-    /** Constructor */
-    STEvent()
-      : eventClass(EVENT_CLASS_NONE),
-        eventType(INVALID_EVENT),
-        eventID(-1),
-        evThreadID(-1),
-        compIOPS(-1),
-        compFLOPS(-1),
-        compMemReads(-1),
-        compMemWrites(-1),
-        subEventsCreated(false)
-    { }
-
-    /** Desctructor */
-    ~STEvent() {
-        if (subEventList)
-            delete subEventList;
-
-        for (auto& event : commPreRequisiteEvents)
-            delete event;
-        for (auto& event : compWriteEvents)
-            delete event;
-        for (auto& event : compReadEvents)
-            delete event;
-    }
 };
 
-// Output overloading
-inline std::ostream &operator <<(std::ostream &os,
-                                 const STEvent &event)
-{
-    os << "Class:" << event.eventClass;
-    os << " EventID:" << event.eventID;
-    os << " ThreadID:" << event.evThreadID;
+struct End {
+};
 
-    if (event.eventClass == STEvent::COMP){
-        os << " compIOPS:" << event.compIOPS;
-        os << " compFLOPS:" << event.compFLOPS;
-        os << " compMemReads:" << event.compMemReads;
-        os << " compMemWrites:" << event.compMemWrites;
-    }
+struct InsnMarker {
+    /** number of instructions this marker represents */
+    uint64_t insns;
+};
 
-    os << " Sub-events creation status:" << event.subEventsCreated;
 
-    return os;
-}
+/**
+ * The original event id in the trace file.
+ * Multiple replay events can be generated from the same event in the trace.
+ * This marker groups replay events that were generated from the same trace
+ * event.
+ */
+struct TraceEventMarker {
+    const StEventID eventId;
+};
 
-inline std::ostream &operator <<(std::ostream &os,
-                                 const MemAddrInfo &mem_addr_info)
-{
-    os << " reqThreadID:" << mem_addr_info.reqThreadID;
-    os << " reqEventID:" << mem_addr_info.reqEventID;
-    os << " addr:" << mem_addr_info.addr;
-    os << " numBytes:" << mem_addr_info.numBytes;
 
-    return os;
-}
+struct StEvent {
+    /**
+     * Tag for event.
+     * Events have a broad classification.
+     */
+    enum class Tag : uint8_t
+    {
+        UNDEFINED,     // Initial value.
+
+        /** Replay events */
+        COMPUTE,       // Computation event, a combination of iops and flops.
+
+        MEMORY,        // A memory request, either read or write.
+
+        MEMORY_COMM,   // An inter-thread communication memory request,
+                       // implicitly read
+
+        THREAD_API,    // Calls to thread library such as thread creation,
+                       // join, barriers, and locks
+
+        /** Meta events */
+        INSN_MARKER,   // Marks a specific number of machine instructions
+                       // passed in the trace.
+
+        TRACE_EVENT_MARKER,  // New event in trace.
+
+        END_OF_EVENTS  // The last event in the event stream.
+    };
+
+    /**
+     * Constants for tagged dispatch constructors.
+     */
+    using ComputeTagType = std::integral_constant<Tag, Tag::COMPUTE>;
+    static constexpr auto ComputeTag = ComputeTagType{};
+
+    using MemoryTagType = std::integral_constant<Tag, Tag::MEMORY>;
+    static constexpr auto MemoryTag = MemoryTagType{};
+
+    using MemoryCommTagType = std::integral_constant<Tag, Tag::MEMORY_COMM>;
+    static constexpr auto MemoryCommTag = MemoryCommTagType{};
+
+    using ThreadApiTagType = std::integral_constant<Tag, Tag::THREAD_API>;
+    static constexpr auto ThreadApiTag = ThreadApiTagType{};
+
+    using InsnMarkerTagType = std::integral_constant<Tag, Tag::INSN_MARKER>;
+    static constexpr auto InsnMarkerTag = InsnMarkerTagType{};
+
+    using TraceEventMarkerTagType =
+        std::integral_constant<Tag, Tag::TRACE_EVENT_MARKER>;
+    static constexpr auto TraceEventMarkerTag = TraceEventMarkerTagType{};
+
+    using EndTagType = std::integral_constant<Tag, Tag::END_OF_EVENTS>;
+    static constexpr auto EndTag = EndTagType{};
+
+
+    /**
+     * The actual event.
+     * An event stream is a sequence of any of the union'd types.
+     *
+     * impl: these are expected to be set only during construction,
+     * hence they are const.
+     */
+    union
+    {
+        ComputeOps                        computeOps;
+        MemoryRequest                     memoryReq;
+        MemoryRequest_ThreadCommunication memoryReqComm;
+        ThreadApi                         threadApi;
+        InsnMarker                        insnMarker;
+        TraceEventMarker                  traceEventMarker;
+        End                               end;
+    };
+    const Tag tag = Tag::UNDEFINED;
+
+    /**
+     * Use tagged dispatched constructors to create the variant.
+     * Allow direct construction instead of static builder methods that may
+     * cause additional copies/moves
+     */
+    StEvent(ComputeTagType,
+            uint32_t iops,
+            uint32_t flops) noexcept
+      : computeOps{iops, flops},
+        tag{Tag::COMPUTE}
+    {}
+
+    StEvent(MemoryTagType,
+            const MemoryRequest& memReq) noexcept
+      : memoryReq{memReq},
+        tag{Tag::MEMORY}
+    {}
+
+    StEvent(MemoryCommTagType,
+            Addr addr,
+            uint32_t bytes,
+            StEventID sourceEventId,
+            ThreadID sourceThreadId) noexcept
+      : memoryReqComm{addr, bytes, sourceEventId, sourceThreadId},
+        tag{Tag::MEMORY}
+    {}
+
+    StEvent(ThreadApiTagType,
+            ThreadApi::EventType type,
+            Addr pthAddr,
+            Addr mutexLockAddr) noexcept
+      : threadApi{pthAddr, mutexLockAddr, type},
+        tag{Tag::THREAD_API}
+    {}
+
+    StEvent(InsnMarkerTagType,
+            uint64_t insns) noexcept
+      : insnMarker{insns},
+        tag{Tag::INSN_MARKER}
+    {}
+
+    StEvent(TraceEventMarkerTagType,
+            StEventID eventId) noexcept
+      : traceEventMarker{eventId},
+        tag{Tag::TRACE_EVENT_MARKER}
+    {}
+
+    StEvent(EndTagType) noexcept
+      : end{},
+        tag{Tag::END_OF_EVENTS}
+    {}
+};
+
 #endif

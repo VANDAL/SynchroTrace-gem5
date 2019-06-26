@@ -4,7 +4,8 @@
  * by Ludwig Schwardt <schwardt@sun.ac.za>
  * original version by Kevin Ruland <kevin@rodin.wustl.edu>
  *
- * This version is standard-compliant and compatible with gcc 3.x.
+ * This version was modified by Mike Lui <mikedlui@gmail.com>
+ * to support moveable streams
  */
 
 #include "zfstream.h"
@@ -18,12 +19,19 @@
 /*****************************************************************************/
 
 // Default constructor
-gzfilebuf::gzfilebuf()
+gzfilebuf::gzfilebuf() noexcept
 : file(NULL), io_mode(std::ios_base::openmode(0)), own_fd(false),
   buffer(NULL), buffer_size(BIGBUFSIZE), own_buffer(true)
 {
   // No buffers to start with
   this->disable_buffer();
+}
+
+// Move constructor
+gzfilebuf::gzfilebuf(gzfilebuf&& other) noexcept
+: gzfilebuf()
+{
+  swap(other);
 }
 
 // Destructor
@@ -36,6 +44,30 @@ gzfilebuf::~gzfilebuf()
     this->close();
   // Make sure internal buffer is deallocated
   this->disable_buffer();
+}
+
+gzfilebuf&
+gzfilebuf::operator=(gzfilebuf&& other) noexcept
+{
+  swap(other);
+  return *this;
+}
+
+// Swap
+void
+gzfilebuf::swap(gzfilebuf& other) noexcept {
+  // swap buffers
+  std::swap(own_buffer, other.own_buffer);
+  std::swap(buffer_size, other.buffer_size);
+  std::swap(buffer, other.buffer);
+
+  // swap locale and get/put area pointers
+  std::streambuf::swap(other);
+
+  // swap files
+  std::swap(io_mode, other.io_mode);
+  std::swap(own_fd, other.own_fd);
+  std::swap(file, other.file);
 }
 
 // Set compression level and strategy
@@ -344,7 +376,7 @@ gzfilebuf::enable_buffer()
 
 // Destroy internal buffer
 void
-gzfilebuf::disable_buffer()
+gzfilebuf::disable_buffer() noexcept
 {
   // If internal buffer exists, deallocate it
   if (own_buffer && buffer)
@@ -391,6 +423,31 @@ gzifstream::gzifstream(int fd,
 {
   this->init(&sb);
   this->attach(fd, mode);
+}
+
+// Move constructor swaps streams
+gzifstream::gzifstream(gzifstream&& other) noexcept
+: gzifstream()
+{
+  this->swap(other);
+}
+
+// Move assignment swaps streams
+gzifstream&
+gzifstream::operator=(gzifstream&& other) noexcept
+{
+  this->swap(other);
+  return *this;
+}
+
+// Swap swaps underlying gzfilebuf and stream state
+void gzifstream::swap(gzifstream& other) noexcept
+{
+  // swap istream state
+  std::istream::swap(other);
+
+  // swap the underlying rdbuf
+  sb.swap(other.sb);
 }
 
 // Open file and go into fail() state if unsuccessful
@@ -446,6 +503,31 @@ gzofstream::gzofstream(int fd,
 {
   this->init(&sb);
   this->attach(fd, mode);
+}
+
+// Move constructor swaps streams
+gzofstream::gzofstream(gzofstream&& other) noexcept
+: gzofstream()
+{
+    this->swap(other);
+}
+
+// Move assignment swaps streams
+gzofstream&
+gzofstream::operator=(gzofstream&& other) noexcept
+{
+  this->swap(other);
+  return *this;
+}
+
+// Swap swaps underlying gzfilebuf and stream state
+void gzofstream::swap(gzofstream& other) noexcept
+{
+  // swap ostream state
+  std::ostream::swap(other);
+
+  // swap the underlying rdbuf
+  sb.swap(other.sb);
 }
 
 // Open file and go into fail() state if unsuccessful
