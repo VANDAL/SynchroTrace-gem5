@@ -305,7 +305,8 @@ Cache::promoteWholeLineWrites(PacketPtr pkt)
 {
     // Cache line clearing instructions
     if (doFastWrites && (pkt->cmd == MemCmd::WriteReq) &&
-        (pkt->getSize() == blkSize) && (pkt->getOffset(blkSize) == 0)) {
+        (pkt->getSize() == blkSize) && (pkt->getOffset(blkSize) == 0) &&
+        !pkt->isMaskedWrite()) {
         pkt->cmd = MemCmd::WriteLineReq;
         DPRINTF(Cache, "packet promoted from Write to WriteLineReq\n");
     }
@@ -383,7 +384,7 @@ Cache::handleTimingReqMiss(PacketPtr pkt, CacheBlk *blk, Tick forward_time,
                                                        pkt->req->masterId());
             pf = new Packet(req, pkt->cmd);
             pf->allocate();
-            assert(pf->getAddr() == pkt->getAddr());
+            assert(pf->matchAddr(pkt));
             assert(pf->getSize() == pkt->getSize());
         }
 
@@ -687,7 +688,7 @@ Cache::recvAtomic(PacketPtr pkt)
 void
 Cache::serviceMSHRTargets(MSHR *mshr, const PacketPtr pkt, CacheBlk *blk)
 {
-    MSHR::Target *initial_tgt = mshr->getTarget();
+    QueueEntry::Target *initial_tgt = mshr->getTarget();
     // First offset for critical word first calculations
     const int initial_offset = initial_tgt->pkt->getOffset(blkSize);
 
@@ -781,7 +782,7 @@ Cache::serviceMSHRTargets(MSHR *mshr, const PacketPtr pkt, CacheBlk *blk)
                     pkt->payloadDelay;
                 if (pkt->isRead() && !is_error) {
                     // sanity check
-                    assert(pkt->getAddr() == tgt_pkt->getAddr());
+                    assert(pkt->matchAddr(tgt_pkt));
                     assert(pkt->getSize() >= tgt_pkt->getSize());
 
                     tgt_pkt->setData(pkt->getConstPtr<uint8_t>());
@@ -1128,6 +1129,12 @@ Cache::handleSnoop(PacketPtr pkt, CacheBlk *blk, bool is_timing,
             // payload
             if (pkt->hasData())
                 pkt->setDataFromBlock(blk->data, blkSize);
+        }
+
+        // When a block is compressed, it must first be decompressed before
+        // being read, and this increases the snoop delay.
+        if (compressor && pkt->isRead()) {
+            snoop_delay += compressor->getDecompressionLatency(blk);
         }
     }
 

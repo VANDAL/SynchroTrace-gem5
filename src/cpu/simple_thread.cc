@@ -77,23 +77,21 @@ SimpleThread::SimpleThread(BaseCPU *_cpu, int _thread_num, System *_sys,
                            Process *_process, BaseTLB *_itb,
                            BaseTLB *_dtb, TheISA::ISA *_isa)
     : ThreadState(_cpu, _thread_num, _process), isa(_isa),
-      predicate(false), system(_sys),
+      predicate(true), memAccPredicate(true), system(_sys),
       itb(_itb), dtb(_dtb), decoder(TheISA::Decoder(_isa))
 {
     clearArchRegs();
-    tc = new ProxyThreadContext<SimpleThread>(this);
-    quiesceEvent = new EndQuiesceEvent(tc);
+    quiesceEvent = new EndQuiesceEvent(this);
 }
 
 SimpleThread::SimpleThread(BaseCPU *_cpu, int _thread_num, System *_sys,
                            BaseTLB *_itb, BaseTLB *_dtb,
                            TheISA::ISA *_isa, bool use_kernel_stats)
-    : ThreadState(_cpu, _thread_num, NULL), isa(_isa), system(_sys), itb(_itb),
-      dtb(_dtb), decoder(TheISA::Decoder(_isa))
+    : ThreadState(_cpu, _thread_num, NULL), isa(_isa),
+      predicate(true), memAccPredicate(true), system(_sys),
+      itb(_itb), dtb(_dtb), decoder(TheISA::Decoder(_isa))
 {
-    tc = new ProxyThreadContext<SimpleThread>(this);
-
-    quiesceEvent = new EndQuiesceEvent(tc);
+    quiesceEvent = new EndQuiesceEvent(this);
 
     clearArchRegs();
 
@@ -115,15 +113,10 @@ SimpleThread::SimpleThread(BaseCPU *_cpu, int _thread_num, System *_sys,
         kernelStats = new TheISA::Kernel::Statistics();
 }
 
-SimpleThread::~SimpleThread()
-{
-    delete tc;
-}
-
 void
 SimpleThread::takeOverFrom(ThreadContext *oldContext)
 {
-    ::takeOverFrom(*tc, *oldContext);
+    ::takeOverFrom(*this, *oldContext);
     decoder.takeOverFrom(oldContext->getDecoderPtr());
 
     kernelStats = oldContext->getKernelStats();
@@ -148,7 +141,7 @@ void
 SimpleThread::serialize(CheckpointOut &cp) const
 {
     ThreadState::serialize(cp);
-    ::serialize(*tc, cp);
+    ::serialize(*this, cp);
 }
 
 
@@ -156,20 +149,20 @@ void
 SimpleThread::unserialize(CheckpointIn &cp)
 {
     ThreadState::unserialize(cp);
-    ::unserialize(*tc, cp);
+    ::unserialize(*this, cp);
 }
 
 void
 SimpleThread::startup()
 {
-    isa->startup(tc);
+    isa->startup(this);
 }
 
 void
 SimpleThread::dumpFuncProfile()
 {
     OutputStream *os(simout.create(csprintf("profile.%s.dat", baseCpu->name())));
-    profile->dump(tc, *os->stream());
+    profile->dump(this, *os->stream());
     simout.close(os);
 }
 
@@ -218,21 +211,5 @@ SimpleThread::regStats(const string &name)
 void
 SimpleThread::copyArchRegs(ThreadContext *src_tc)
 {
-    TheISA::copyRegs(src_tc, tc);
+    TheISA::copyRegs(src_tc, this);
 }
-
-// The following methods are defined in src/arch/alpha/ev5.cc for
-// Alpha.
-#if THE_ISA != ALPHA_ISA
-Fault
-SimpleThread::hwrei()
-{
-    return NoFault;
-}
-
-bool
-SimpleThread::simPalCheck(int palFunc)
-{
-    return true;
-}
-#endif

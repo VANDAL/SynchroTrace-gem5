@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010-2012,2017 ARM Limited
+ * Copyright (c) 2010-2012,2017-2019 ARM Limited
  * All rights reserved
  *
  * The license below extends only to copyright in the software and shall
@@ -57,7 +57,10 @@
 using namespace std;
 
 AbstractMemory::AbstractMemory(const Params *p) :
-    MemObject(p), range(params()->range), pmemAddr(NULL),
+    ClockedObject(p), range(params()->range), pmemAddr(NULL),
+    backdoor(params()->range, nullptr,
+             (MemBackdoor::Flags)(MemBackdoor::Readable |
+                                  MemBackdoor::Writeable)),
     confTableReported(p->conf_table_reported), inAddrMap(p->in_addr_map),
     kvmMap(p->kvm_map), _system(NULL)
 {
@@ -75,13 +78,20 @@ AbstractMemory::init()
 void
 AbstractMemory::setBackingStore(uint8_t* pmem_addr)
 {
+    // If there was an existing backdoor, let everybody know it's going away.
+    if (backdoor.ptr())
+        backdoor.invalidate();
+
+    // The back door can't handle interleaved memory.
+    backdoor.ptr(range.interleaved() ? nullptr : pmem_addr);
+
     pmemAddr = pmem_addr;
 }
 
 void
 AbstractMemory::regStats()
 {
-    MemObject::regStats();
+    ClockedObject::regStats();
 
     using namespace Stats;
 
@@ -274,7 +284,10 @@ AbstractMemory::checkLockedAddrList(PacketPtr pkt)
                 DPRINTF(LLSC, "Erasing lock record: context %d addr %#x\n",
                         i->contextId, paddr);
                 ContextID owner_cid = i->contextId;
-                ContextID requester_cid = pkt->req->contextId();
+                assert(owner_cid != InvalidContextID);
+                ContextID requester_cid = req->hasContextId() ?
+                                           req->contextId() :
+                                           InvalidContextID;
                 if (owner_cid != requester_cid) {
                     ThreadContext* ctx = system()->getThreadContext(owner_cid);
                     TheISA::globalClearExclusive(ctx);
@@ -329,8 +342,7 @@ AbstractMemory::access(PacketPtr pkt)
       return;
     }
 
-    assert(AddrRange(pkt->getAddr(),
-                     pkt->getAddr() + (pkt->getSize() - 1)).isSubset(range));
+    assert(pkt->getAddrRange().isSubset(range));
 
     uint8_t *hostAddr = pmemAddr + pkt->getAddr() - range.start();
 
@@ -420,8 +432,7 @@ AbstractMemory::access(PacketPtr pkt)
 void
 AbstractMemory::functionalAccess(PacketPtr pkt)
 {
-    assert(AddrRange(pkt->getAddr(),
-                     pkt->getAddr() + pkt->getSize() - 1).isSubset(range));
+    assert(pkt->getAddrRange().isSubset(range));
 
     uint8_t *hostAddr = pmemAddr + pkt->getAddr() - range.start();
 

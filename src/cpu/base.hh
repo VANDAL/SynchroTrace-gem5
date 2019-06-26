@@ -58,7 +58,7 @@
 #include "arch/isa_traits.hh"
 #include "arch/microcode_rom.hh"
 #include "base/statistics.hh"
-#include "mem/mem_object.hh"
+#include "sim/clocked_object.hh"
 #include "sim/eventq.hh"
 #include "sim/full_system.hh"
 #include "sim/insttracer.hh"
@@ -106,7 +106,7 @@ class CPUProgressEvent : public Event
     virtual const char *description() const;
 };
 
-class BaseCPU : public MemObject
+class BaseCPU : public ClockedObject
 {
   protected:
 
@@ -175,9 +175,9 @@ class BaseCPU : public MemObject
     uint32_t socketId() const { return _socketId; }
 
     /** Reads this CPU's unique data requestor ID */
-    MasterID dataMasterId() { return _dataMasterId; }
+    MasterID dataMasterId() const { return _dataMasterId; }
     /** Reads this CPU's unique instruction requestor ID */
-    MasterID instMasterId() { return _instMasterId; }
+    MasterID instMasterId() const { return _instMasterId; }
 
     /**
      * Get a port on this CPU. All CPUs have a data and
@@ -287,7 +287,9 @@ class BaseCPU : public MemObject
    virtual ThreadContext *getContext(int tn) { return threadContexts[tn]; }
 
    /// Get the number of thread contexts available
-   unsigned numContexts() { return threadContexts.size(); }
+   unsigned numContexts() {
+       return static_cast<unsigned>(threadContexts.size());
+   }
 
     /// Convert ContextID to threadID
     ThreadID contextToThread(ContextID cid)
@@ -399,7 +401,7 @@ class BaseCPU : public MemObject
      * uniform data format for all CPU models and promotes better code
      * reuse.
      *
-     * @param os The stream to serialize to.
+     * @param cp The stream to serialize to.
      */
     void serialize(CheckpointOut &cp) const override;
 
@@ -412,14 +414,13 @@ class BaseCPU : public MemObject
      * promotes better code reuse.
 
      * @param cp The checkpoint use.
-     * @param section The section name of this object.
      */
     void unserialize(CheckpointIn &cp) override;
 
     /**
      * Serialize a single thread.
      *
-     * @param os The stream to serialize to.
+     * @param cp The stream to serialize to.
      * @param tid ID of the current thread.
      */
     virtual void serializeThread(CheckpointOut &cp, ThreadID tid) const {};
@@ -428,7 +429,6 @@ class BaseCPU : public MemObject
      * Unserialize one thread.
      *
      * @param cp The checkpoint use.
-     * @param section The section name of this thread.
      * @param tid ID of the current thread.
      */
     virtual void unserializeThread(CheckpointIn &cp, ThreadID tid) {};

@@ -1,6 +1,15 @@
 /*
- * Copyright (c) 2009 The Regents of The University of Michigan
- * All rights reserved.
+ * Copyright (c) 2012, 2018 ARM Limited
+ * All rights reserved
+ *
+ * The license below extends only to copyright in the software and shall
+ * not be construed as granting a license to any other intellectual
+ * property including but not limited to intellectual property relating
+ * to a hardware implementation of the functionality of the software
+ * licensed hereunder.  You may use the software subject to the license
+ * terms below provided that you ensure that this notice is replicated
+ * unmodified and in its entirety in all distributions of the software,
+ * modified or unmodified, in source code or in binary form.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are
@@ -25,46 +34,28 @@
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  *
- * Authors: Korey Sewell
- *
+ * Authors: Andreas Hansson
  */
 
-#ifndef __ARCH_ALPHA_MT_HH__
-#define __ARCH_ALPHA_MT_HH__
+#include "mem/secure_port_proxy.hh"
 
-/**
- * @file
- *
- * ISA-specific helper functions for multithreaded execution.
- */
-
-#include <iostream>
-
-#include "arch/isa_traits.hh"
-#include "base/bitfield.hh"
-#include "base/logging.hh"
-#include "base/trace.hh"
-
-namespace AlphaISA
+bool
+SecurePortProxy::tryReadBlob(Addr addr, void *p, int size) const
 {
-
-template <class TC>
-inline unsigned
-getVirtProcNum(TC *tc)
-{
-    fatal("Alpha is not setup for multithreaded ISA extensions");
-    return 0;
+    readBlobPhys(addr, Request::SECURE, p, size);
+    return true;
 }
 
-
-template <class TC>
-inline unsigned
-getTargetThread(TC *tc)
+bool
+SecurePortProxy::tryWriteBlob(Addr addr, const void *p, int size) const
 {
-    fatal("Alpha is not setup for multithreaded ISA extensions");
-    return 0;
+    writeBlobPhys(addr, Request::SECURE, p, size);
+    return true;
 }
 
-} // namespace AlphaISA
-
-#endif
+bool
+SecurePortProxy::tryMemsetBlob(Addr addr, uint8_t v, int size) const
+{
+    memsetBlobPhys(addr, Request::SECURE, v, size);
+    return true;
+}

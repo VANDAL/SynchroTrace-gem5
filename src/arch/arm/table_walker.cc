@@ -57,7 +57,7 @@
 using namespace ArmISA;
 
 TableWalker::TableWalker(const Params *p)
-    : MemObject(p),
+    : ClockedObject(p),
       stage2Mmu(NULL), port(NULL), masterId(Request::invldMasterId),
       isStage2(p->is_stage2), tlb(NULL),
       currState(NULL), pending(false),
@@ -124,13 +124,16 @@ TableWalker::getPort(const std::string &if_name, PortID idx)
             fatal("Cannot access table walker port through stage-two walker\n");
         }
     }
-    return MemObject::getPort(if_name, idx);
+    return ClockedObject::getPort(if_name, idx);
 }
 
 TableWalker::WalkerState::WalkerState() :
     tc(nullptr), aarch64(false), el(EL0), physAddrRange(0), req(nullptr),
     asid(0), vmid(0), isHyp(false), transState(nullptr),
-    vaddr(0), vaddr_tainted(0), isWrite(false), isFetch(false), isSecure(false),
+    vaddr(0), vaddr_tainted(0),
+    sctlr(0), scr(0), cpsr(0), tcr(0),
+    htcr(0), hcr(0), vtcr(0),
+    isWrite(false), isFetch(false), isSecure(false),
     secureLookup(false), rwTable(false), userTable(false), xnTable(false),
     pxnTable(false), stage2Req(false),
     stage2Tran(nullptr), timing(false), functional(false),

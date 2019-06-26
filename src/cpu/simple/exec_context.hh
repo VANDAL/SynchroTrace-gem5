@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014-2017 ARM Limited
+ * Copyright (c) 2014-2018 ARM Limited
  * All rights reserved
  *
  * The license below extends only to copyright in the software and shall
@@ -434,26 +434,32 @@ class SimpleExecContext : public ExecContext {
         thread->pcState(val);
     }
 
-
     Fault
     readMem(Addr addr, uint8_t *data, unsigned int size,
-            Request::Flags flags) override
+            Request::Flags flags,
+            const std::vector<bool>& byteEnable = std::vector<bool>())
+        override
     {
-        return cpu->readMem(addr, data, size, flags);
+        return cpu->readMem(addr, data, size, flags, byteEnable);
     }
 
     Fault
     initiateMemRead(Addr addr, unsigned int size,
-                    Request::Flags flags) override
+                    Request::Flags flags,
+                    const std::vector<bool>& byteEnable = std::vector<bool>())
+        override
     {
-        return cpu->initiateMemRead(addr, size, flags);
+        return cpu->initiateMemRead(addr, size, flags, byteEnable);
     }
 
     Fault
     writeMem(uint8_t *data, unsigned int size, Addr addr,
-             Request::Flags flags, uint64_t *res) override
+             Request::Flags flags, uint64_t *res,
+             const std::vector<bool>& byteEnable = std::vector<bool>())
+        override
     {
-        return cpu->writeMem(data, size, addr, flags, res);
+        assert(byteEnable.empty() || byteEnable.size() == size);
+        return cpu->writeMem(data, size, addr, flags, res, byteEnable);
     }
 
     Fault amoMem(Addr addr, uint8_t *data, unsigned int size,
@@ -502,22 +508,6 @@ class SimpleExecContext : public ExecContext {
     /** Returns a pointer to the ThreadContext. */
     ThreadContext *tcBase() override { return thread->getTC(); }
 
-    /**
-     * Somewhat Alpha-specific function that handles returning from an
-     * error or interrupt.
-     */
-    Fault hwrei() override { return thread->hwrei(); }
-
-    /**
-     * Check for special simulator handling of specific PAL calls.  If
-     * return value is false, actual PAL call will be suppressed.
-     */
-    bool
-    simPalCheck(int palFunc) override
-    {
-        return thread->simPalCheck(palFunc);
-    }
-
     bool
     readPredicate() const override
     {
@@ -532,6 +522,18 @@ class SimpleExecContext : public ExecContext {
         if (cpu->traceData) {
             cpu->traceData->setPredicate(val);
         }
+    }
+
+    bool
+    readMemAccPredicate() const override
+    {
+        return thread->readMemAccPredicate();
+    }
+
+    void
+    setMemAccPredicate(bool val) override
+    {
+        thread->setMemAccPredicate(val);
     }
 
     /**
@@ -566,25 +568,6 @@ class SimpleExecContext : public ExecContext {
     {
         return cpu->getCpuAddrMonitor(thread->threadId());
     }
-
-#if THE_ISA == MIPS_ISA
-    RegVal
-    readRegOtherThread(const RegId& reg, ThreadID tid=InvalidThreadID)
-        override
-    {
-        panic("Simple CPU models do not support multithreaded "
-              "register access.");
-    }
-
-    void
-    setRegOtherThread(const RegId& reg, RegVal val,
-                      ThreadID tid=InvalidThreadID) override
-    {
-        panic("Simple CPU models do not support multithreaded "
-              "register access.");
-    }
-#endif
-
 };
 
 #endif // __CPU_EXEC_CONTEXT_HH__

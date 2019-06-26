@@ -99,6 +99,13 @@ let {{
             if self.flavor in ("acex", "exclusive", "exp", "acexp"):
                 self.memFlags.append("Request::LLSC")
 
+            # Using a different execute template for fp flavoured loads.
+            # In this specific template the memacc_code is executed
+            # conditionally depending of wether the memory load has
+            # generated any fault
+            if flavor == "fp":
+                self.fullExecTemplate = eval(self.execBase + 'FpExecute')
+
         def buildEACode(self):
             # Address computation code
             eaCode = ""
@@ -185,7 +192,7 @@ let {{
                 accCode = 'uint64_t temp M5_VAR_USED = Mem%s;'
             elif self.flavor == "fp":
                 accEpilogCode = '''
-                    TheISA::ISA::zeroSveVecRegUpperPart(AA64FpDest,
+                    ArmISA::ISA::zeroSveVecRegUpperPart(AA64FpDest,
                         ArmStaticInst::getCurSveVecLen<uint64_t>(
                             xc->tcBase()));
                 '''
@@ -239,10 +246,10 @@ let {{
             # Code that actually handles the access
             if self.flavor == "fp":
                 accEpilogCode = '''
-                    TheISA::ISA::zeroSveVecRegUpperPart(AA64FpDest,
+                    ArmISA::ISA::zeroSveVecRegUpperPart(AA64FpDest,
                         ArmStaticInst::getCurSveVecLen<uint64_t>(
                             xc->tcBase()));
-                    TheISA::ISA::zeroSveVecRegUpperPart(AA64FpDest2,
+                    ArmISA::ISA::zeroSveVecRegUpperPart(AA64FpDest2,
                         ArmStaticInst::getCurSveVecLen<uint64_t>(
                             xc->tcBase()));
                 '''

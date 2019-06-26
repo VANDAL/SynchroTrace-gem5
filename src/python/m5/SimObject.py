@@ -1,4 +1,4 @@
-# Copyright (c) 2017-2018 ARM Limited
+# Copyright (c) 2017-2019 ARM Limited
 # All rights reserved.
 #
 # The license below extends only to copyright in the software and shall
@@ -171,10 +171,6 @@ def createCxxConfigDirectoryEntryFile(code, name, simobj, is_header):
         code('#include "%s"' % simobj._value_dict['cxx_header'])
         code('#include "base/str.hh"')
         code('#include "cxx_config/${name}.hh"')
-
-        if simobj._ports:
-            code('#include "mem/mem_object.hh"')
-            code('#include "mem/port.hh"')
 
         code()
         code('${member_prefix}DirectoryEntry::DirectoryEntry()');
@@ -659,17 +655,26 @@ class MetaSimObject(type):
         if attr == 'cxx_namespaces':
             return cls.cxx_class_path[:-1]
 
+        if attr == 'pybind_class':
+            return  '_COLONS_'.join(cls.cxx_class_path)
+
         if attr in cls._values:
             return cls._values[attr]
 
         if attr in cls._children:
             return cls._children[attr]
 
-        raise AttributeError(
-              "object '%s' has no attribute '%s'" % (cls.__name__, attr))
+        try:
+            return getattr(cls.getCCClass(), attr)
+        except AttributeError:
+            raise AttributeError(
+                "object '%s' has no attribute '%s'" % (cls.__name__, attr))
 
     def __str__(cls):
         return cls.__name__
+
+    def getCCClass(cls):
+        return getattr(m5.internal.params, cls.pybind_class)
 
     # See ParamValue.cxx_predecls for description.
     def cxx_predecls(cls, code):
@@ -679,10 +684,7 @@ class MetaSimObject(type):
         code('#include "${{cls.cxx_header}}"')
 
     def pybind_decl(cls, code):
-        class_path = cls.cxx_class.split('::')
-        namespaces, classname = class_path[:-1], class_path[-1]
-        py_class_name = '_COLONS_'.join(class_path) if namespaces else \
-                        classname;
+        py_class_name = cls.pybind_class
 
         # The 'local' attribute restricts us to the params declared in
         # the object itself, not including inherited params (which
@@ -956,6 +958,7 @@ def cxxMethod(*args, **kwargs):
         override = kwargs.get("override", False)
         cxx_name = kwargs.get("cxx_name", name)
         return_value_policy = kwargs.get("return_value_policy", None)
+        static = kwargs.get("static", False)
 
         args, varargs, keywords, defaults = inspect.getargspec(func)
         if varargs or keywords:
@@ -972,7 +975,7 @@ def cxxMethod(*args, **kwargs):
 
         @wraps(func)
         def cxx_call(self, *args, **kwargs):
-            ccobj = self.getCCObject()
+            ccobj = self.getCCClass() if static else self.getCCObject()
             return getattr(ccobj, name)(*args, **kwargs)
 
         @wraps(func)
@@ -981,7 +984,8 @@ def cxxMethod(*args, **kwargs):
 
         f = py_call if override else cxx_call
         f.__pybind = PyBindMethod(name, cxx_name=cxx_name, args=args,
-                                  return_value_policy=return_value_policy)
+                                  return_value_policy=return_value_policy,
+                                  static=static)
 
         return f
 

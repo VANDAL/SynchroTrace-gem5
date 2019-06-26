@@ -37,19 +37,23 @@
 class Gicv3CPUInterface;
 class Gicv3Distributor;
 class Gicv3Redistributor;
+class Gicv3Its;
 
 class Gicv3 : public BaseGic
 {
   protected:
     friend class Gicv3CPUInterface;
+    friend class Gicv3Redistributor;
 
     typedef Gicv3Params Params;
     Gicv3Distributor * distributor;
     std::vector<Gicv3Redistributor *> redistributors;
     std::vector<Gicv3CPUInterface *> cpuInterfaces;
+    Gicv3Its * its;
     AddrRange distRange;
     AddrRange redistRange;
     AddrRangeList addrRanges;
+    uint64_t redistSize;
 
   public:
 
@@ -139,6 +143,10 @@ class Gicv3 : public BaseGic
 
     Gicv3Redistributor *
     getRedistributorByAffinity(uint32_t affinity) const;
+
+    Gicv3Redistributor *
+    getRedistributorByAddr(Addr address) const;
+
     void postInt(uint32_t cpu, ArmISA::InterruptTypes int_type);
 };
 

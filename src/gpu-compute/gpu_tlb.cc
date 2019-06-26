@@ -61,7 +61,7 @@ namespace X86ISA
 {
 
     GpuTLB::GpuTLB(const Params *p)
-        : MemObject(p), configAddress(0), size(p->size),
+        : ClockedObject(p), configAddress(0), size(p->size),
           cleanupEvent([this]{ cleanup(); }, name(), false,
                        Event::Maximum_Pri),
           exitEvent([this]{ exitCallback(); }, name())
@@ -97,12 +97,6 @@ namespace X86ISA
          * different sets etc)
          */
         setMask = numSets - 1;
-
-    #if 0
-        // GpuTLB doesn't yet support full system
-        walker = p->walker;
-        walker->setTLB(this);
-    #endif
 
         maxCoalescedReqs = p->maxOutstandingReqs;
 
@@ -950,7 +944,7 @@ namespace X86ISA
     void
     GpuTLB::regStats()
     {
-        MemObject::regStats();
+        ClockedObject::regStats();
 
         localNumTLBAccesses
             .name(name() + ".local_TLB_accesses")

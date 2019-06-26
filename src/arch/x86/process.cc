@@ -150,7 +150,7 @@ X86_64Process::X86_64Process(ProcessParams *params, ObjectFile *objFile,
 void
 I386Process::syscall(int64_t callnum, ThreadContext *tc, Fault *fault)
 {
-    TheISA::PCState pc = tc->pcState();
+    PCState pc = tc->pcState();
     Addr eip = pc.pc();
     if (eip >= vsyscallPage.base &&
             eip < vsyscallPage.base + vsyscallPage.size) {
@@ -165,6 +165,9 @@ I386Process::I386Process(ProcessParams *params, ObjectFile *objFile,
                          SyscallDesc *_syscallDescs, int _numSyscallDescs)
     : X86Process(params, objFile, _syscallDescs, _numSyscallDescs)
 {
+    if (kvmInSE)
+        panic("KVM CPU model does not support 32 bit processes");
+
     _gdtStart = ULL(0xffffd000);
     _gdtSize = PageBytes;
 
@@ -196,6 +199,9 @@ void
 X86_64Process::initState()
 {
     X86Process::initState();
+
+    if (useForClone)
+        return;
 
     argsInit(PageBytes);
 
@@ -233,7 +239,7 @@ X86_64Process::initState()
         uint8_t numGDTEntries = 0;
         uint64_t nullDescriptor = 0;
         physProxy.writeBlob(gdtPhysAddr + numGDTEntries * 8,
-                            (uint8_t *)(&nullDescriptor), 8);
+                            &nullDescriptor, 8);
         numGDTEntries++;
 
         SegDescriptor initDesc = 0;
@@ -254,7 +260,7 @@ X86_64Process::initState()
         csLowPLDesc.dpl = 0;
         uint64_t csLowPLDescVal = csLowPLDesc;
         physProxy.writeBlob(gdtPhysAddr + numGDTEntries * 8,
-                            (uint8_t *)(&csLowPLDescVal), 8);
+                            &csLowPLDescVal, 8);
 
         numGDTEntries++;
 
@@ -268,7 +274,7 @@ X86_64Process::initState()
         dsLowPLDesc.dpl = 0;
         uint64_t dsLowPLDescVal = dsLowPLDesc;
         physProxy.writeBlob(gdtPhysAddr + numGDTEntries * 8,
-                            (uint8_t *)(&dsLowPLDescVal), 8);
+                            &dsLowPLDescVal, 8);
 
         numGDTEntries++;
 
@@ -282,7 +288,7 @@ X86_64Process::initState()
         dsDesc.dpl = 3;
         uint64_t dsDescVal = dsDesc;
         physProxy.writeBlob(gdtPhysAddr + numGDTEntries * 8,
-                            (uint8_t *)(&dsDescVal), 8);
+                            &dsDescVal, 8);
 
         numGDTEntries++;
 
@@ -296,7 +302,7 @@ X86_64Process::initState()
         csDesc.dpl = 3;
         uint64_t csDescVal = csDesc;
         physProxy.writeBlob(gdtPhysAddr + numGDTEntries * 8,
-                            (uint8_t *)(&csDescVal), 8);
+                            &csDescVal, 8);
 
         numGDTEntries++;
 
@@ -329,7 +335,7 @@ X86_64Process::initState()
         } tssDescVal = {TSSDescLow, TSSDescHigh};
 
         physProxy.writeBlob(gdtPhysAddr + numGDTEntries * 8,
-                            (uint8_t *)(&tssDescVal), sizeof(tssDescVal));
+                            &tssDescVal, sizeof(tssDescVal));
 
         numGDTEntries++;
 
@@ -494,7 +500,7 @@ X86_64Process::initState()
         tss.RSP1_high = tss.IST1_high;
         tss.RSP2_low  = tss.IST1_low;
         tss.RSP2_high = tss.IST1_high;
-        physProxy.writeBlob(tssPhysAddr, (uint8_t *)(&tss), sizeof(tss));
+        physProxy.writeBlob(tssPhysAddr, &tss, sizeof(tss));
 
         /* Setting IDT gates */
         GateDescriptorLow PFGateLow = 0;
@@ -514,8 +520,7 @@ X86_64Process::initState()
             uint64_t high;
         } PFGate = {PFGateLow, PFGateHigh};
 
-        physProxy.writeBlob(idtPhysAddr + 0xE0,
-                            (uint8_t *)(&PFGate), sizeof(PFGate));
+        physProxy.writeBlob(idtPhysAddr + 0xE0, &PFGate, sizeof(PFGate));
 
         /* System call handler */
         uint8_t syscallBlob[] = {
@@ -756,8 +761,7 @@ X86Process::argsInit(int pageSize,
 {
     int intSize = sizeof(IntType);
 
-    typedef AuxVector<IntType> auxv_t;
-    std::vector<auxv_t> auxv = extraAuxvs;
+    std::vector<AuxVector<IntType>> auxv = extraAuxvs;
 
     string filename;
     if (argv.size() < 1)
@@ -853,40 +857,40 @@ X86Process::argsInit(int pageSize,
 
         // Bits which describe the system hardware capabilities
         // XXX Figure out what these should be
-        auxv.push_back(auxv_t(M5_AT_HWCAP, features));
+        auxv.emplace_back(M5_AT_HWCAP, features);
         // The system page size
-        auxv.push_back(auxv_t(M5_AT_PAGESZ, X86ISA::PageBytes));
+        auxv.emplace_back(M5_AT_PAGESZ, X86ISA::PageBytes);
         // Frequency at which times() increments
         // Defined to be 100 in the kernel source.
-        auxv.push_back(auxv_t(M5_AT_CLKTCK, 100));
+        auxv.emplace_back(M5_AT_CLKTCK, 100);
         // This is the virtual address of the program header tables if they
         // appear in the executable image.
-        auxv.push_back(auxv_t(M5_AT_PHDR, elfObject->programHeaderTable()));
+        auxv.emplace_back(M5_AT_PHDR, elfObject->programHeaderTable());
         // This is the size of a program header entry from the elf file.
-        auxv.push_back(auxv_t(M5_AT_PHENT, elfObject->programHeaderSize()));
+        auxv.emplace_back(M5_AT_PHENT, elfObject->programHeaderSize());
         // This is the number of program headers from the original elf file.
-        auxv.push_back(auxv_t(M5_AT_PHNUM, elfObject->programHeaderCount()));
+        auxv.emplace_back(M5_AT_PHNUM, elfObject->programHeaderCount());
         // This is the base address of the ELF interpreter; it should be
         // zero for static executables or contain the base address for
         // dynamic executables.
-        auxv.push_back(auxv_t(M5_AT_BASE, getBias()));
+        auxv.emplace_back(M5_AT_BASE, getBias());
         // XXX Figure out what this should be.
-        auxv.push_back(auxv_t(M5_AT_FLAGS, 0));
+        auxv.emplace_back(M5_AT_FLAGS, 0);
         // The entry point to the program
-        auxv.push_back(auxv_t(M5_AT_ENTRY, objFile->entryPoint()));
+        auxv.emplace_back(M5_AT_ENTRY, objFile->entryPoint());
         // Different user and group IDs
-        auxv.push_back(auxv_t(M5_AT_UID, uid()));
-        auxv.push_back(auxv_t(M5_AT_EUID, euid()));
-        auxv.push_back(auxv_t(M5_AT_GID, gid()));
-        auxv.push_back(auxv_t(M5_AT_EGID, egid()));
+        auxv.emplace_back(M5_AT_UID, uid());
+        auxv.emplace_back(M5_AT_EUID, euid());
+        auxv.emplace_back(M5_AT_GID, gid());
+        auxv.emplace_back(M5_AT_EGID, egid());
         // Whether to enable "secure mode" in the executable
-        auxv.push_back(auxv_t(M5_AT_SECURE, 0));
+        auxv.emplace_back(M5_AT_SECURE, 0);
         // The address of 16 "random" bytes.
-        auxv.push_back(auxv_t(M5_AT_RANDOM, 0));
+        auxv.emplace_back(M5_AT_RANDOM, 0);
         // The name of the program
-        auxv.push_back(auxv_t(M5_AT_EXECFN, 0));
+        auxv.emplace_back(M5_AT_EXECFN, 0);
         // The platform string
-        auxv.push_back(auxv_t(M5_AT_PLATFORM, 0));
+        auxv.emplace_back(M5_AT_PLATFORM, 0);
     }
 
     // Figure out how big the initial stack needs to be
@@ -994,42 +998,37 @@ X86Process::argsInit(int pageSize,
 
     // Write out the sentry void *
     IntType sentry_NULL = 0;
-    initVirtMem.writeBlob(sentry_base, (uint8_t*)&sentry_NULL, sentry_size);
+    initVirtMem.writeBlob(sentry_base, &sentry_NULL, sentry_size);
 
     // Write the file name
     initVirtMem.writeString(file_name_base, filename.c_str());
 
     // Fix up the aux vectors which point to data
-    assert(auxv[auxv.size() - 3].getHostAuxType() == M5_AT_RANDOM);
-    auxv[auxv.size() - 3].setAuxVal(aux_data_base);
-    assert(auxv[auxv.size() - 2].getHostAuxType() == M5_AT_EXECFN);
-    auxv[auxv.size() - 2].setAuxVal(argv_array_base);
-    assert(auxv[auxv.size() - 1].getHostAuxType() == M5_AT_PLATFORM);
-    auxv[auxv.size() - 1].setAuxVal(aux_data_base + numRandomBytes);
+    assert(auxv[auxv.size() - 3].type == M5_AT_RANDOM);
+    auxv[auxv.size() - 3].val = aux_data_base;
+    assert(auxv[auxv.size() - 2].type == M5_AT_EXECFN);
+    auxv[auxv.size() - 2].val = argv_array_base;
+    assert(auxv[auxv.size() - 1].type == M5_AT_PLATFORM);
+    auxv[auxv.size() - 1].val = aux_data_base + numRandomBytes;
 
 
     // Copy the aux stuff
-    for (int x = 0; x < auxv.size(); x++) {
-        initVirtMem.writeBlob(auxv_array_base + x * 2 * intSize,
-                              (uint8_t*)&(auxv[x].getAuxType()),
-                              intSize);
-        initVirtMem.writeBlob(auxv_array_base + (x * 2 + 1) * intSize,
-                              (uint8_t*)&(auxv[x].getAuxVal()),
-                              intSize);
+    Addr auxv_array_end = auxv_array_base;
+    for (const auto &aux: auxv) {
+        initVirtMem.write(auxv_array_end, aux, GuestByteOrder);
+        auxv_array_end += sizeof(aux);
     }
     // Write out the terminating zeroed auxiliary vector
-    const uint64_t zero = 0;
-    initVirtMem.writeBlob(auxv_array_base + auxv.size() * 2 * intSize,
-                          (uint8_t*)&zero, intSize);
-    initVirtMem.writeBlob(auxv_array_base + (auxv.size() * 2 + 1) * intSize,
-                          (uint8_t*)&zero, intSize);
+    const AuxVector<uint64_t> zero(0, 0);
+    initVirtMem.write(auxv_array_end, zero);
+    auxv_array_end += sizeof(zero);
 
     initVirtMem.writeString(aux_data_base, platform.c_str());
 
     copyStringArray(envp, envp_array_base, env_data_base, initVirtMem);
     copyStringArray(argv, argv_array_base, arg_data_base, initVirtMem);
 
-    initVirtMem.writeBlob(argc_base, (uint8_t*)&guestArgc, intSize);
+    initVirtMem.writeBlob(argc_base, &guestArgc, intSize);
 
     ThreadContext *tc = system->getThreadContext(contextIds[0]);
     // Set the stack pointer register
@@ -1047,8 +1046,7 @@ void
 X86_64Process::argsInit(int pageSize)
 {
     std::vector<AuxVector<uint64_t> > extraAuxvs;
-    extraAuxvs.push_back(AuxVector<uint64_t>(M5_AT_SYSINFO_EHDR,
-                vsyscallPage.base));
+    extraAuxvs.emplace_back(M5_AT_SYSINFO_EHDR, vsyscallPage.base);
     X86Process::argsInit<uint64_t>(pageSize, extraAuxvs);
 }
 
@@ -1057,10 +1055,9 @@ I386Process::argsInit(int pageSize)
 {
     std::vector<AuxVector<uint32_t> > extraAuxvs;
     //Tell the binary where the vsyscall part of the vsyscall page is.
-    extraAuxvs.push_back(AuxVector<uint32_t>(M5_AT_SYSINFO,
-                vsyscallPage.base + vsyscallPage.vsyscallOffset));
-    extraAuxvs.push_back(AuxVector<uint32_t>(M5_AT_SYSINFO_EHDR,
-                vsyscallPage.base));
+    extraAuxvs.emplace_back(M5_AT_SYSINFO,
+            vsyscallPage.base + vsyscallPage.vsyscallOffset);
+    extraAuxvs.emplace_back(M5_AT_SYSINFO_EHDR, vsyscallPage.base);
     X86Process::argsInit<uint32_t>(pageSize, extraAuxvs);
 }
 

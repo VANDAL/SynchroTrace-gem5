@@ -1,6 +1,15 @@
 /*
- * Copyright (c) 2011 The Regents of The University of Michigan
- * All rights reserved.
+ * Copyright (c) 2014, 2018-2019 ARM Limited
+ * All rights reserved
+ *
+ * The license below extends only to copyright in the software and shall
+ * not be construed as granting a license to any other intellectual
+ * property including but not limited to intellectual property relating
+ * to a hardware implementation of the functionality of the software
+ * licensed hereunder.  You may use the software subject to the license
+ * terms below provided that you ensure that this notice is replicated
+ * unmodified and in its entirety in all distributions of the software,
+ * modified or unmodified, in source code or in binary form.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are
@@ -25,46 +34,33 @@
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  *
- * Authors: Korey Sewell
- *
+ * Authors: Stan Czerniawski
  */
 
-#ifndef __ARCH_SPARC_MT_HH__
-#define __ARCH_SPARC_MT_HH__
+#ifndef __DEV_ARM_SMMU_V3_EVENTS_HH__
+#define __DEV_ARM_SMMU_V3_EVENTS_HH__
 
-/**
- * @file
- *
- * ISA-specific helper functions for multithreaded execution.
- */
+#include <base/types.hh>
+#include <sim/eventq.hh>
 
-#include <iostream>
+class SMMUv3SlaveInterface;
 
-#include "arch/isa_traits.hh"
-#include "base/bitfield.hh"
-#include "base/logging.hh"
-#include "base/trace.hh"
-
-namespace SparcISA
+class SMMUDeviceRetryEvent : public Event
 {
+  private:
+    SMMUv3SlaveInterface &smmuIfc;
 
-template <class TC>
-inline unsigned
-getVirtProcNum(TC *tc)
-{
-    fatal("Sparc is not setup for multithreaded ISA extensions");
-    return 0;
-}
+  public:
+    SMMUDeviceRetryEvent(SMMUv3SlaveInterface &ifc)
+        : smmuIfc(ifc)
+    {}
 
+    void process();
 
-template <class TC>
-inline unsigned
-getTargetThread(TC *tc)
-{
-    fatal("Sparc is not setup for multithreaded ISA extensions");
-    return 0;
-}
+    const std::string name() const;
 
-} // namespace SparcISA
+    const char *description() const
+    { return "SlaveRetryEvent"; }
+};
 
-#endif
+#endif /* __DEV_ARM_SMMU_V3_EVENTS_HH__ */

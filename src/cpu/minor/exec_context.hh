@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2014, 2016-2017 ARM Limited
+ * Copyright (c) 2011-2014, 2016-2018 ARM Limited
  * Copyright (c) 2013 Advanced Micro Devices, Inc.
  * All rights reserved
  *
@@ -96,28 +96,40 @@ class ExecContext : public ::ExecContext
     {
         DPRINTF(MinorExecute, "ExecContext setting PC: %s\n", inst->pc);
         pcState(inst->pc);
-        setPredicate(true);
+        setPredicate(inst->readPredicate());
+        setMemAccPredicate(inst->readMemAccPredicate());
         thread.setIntReg(TheISA::ZeroReg, 0);
 #if THE_ISA == ALPHA_ISA
         thread.setFloatReg(TheISA::ZeroReg, 0);
 #endif
     }
 
+    ~ExecContext()
+    {
+        inst->setPredicate(readPredicate());
+        inst->setMemAccPredicate(readMemAccPredicate());
+    }
+
     Fault
     initiateMemRead(Addr addr, unsigned int size,
-                    Request::Flags flags) override
+                    Request::Flags flags,
+                    const std::vector<bool>& byteEnable = std::vector<bool>())
+        override
     {
         execute.getLSQ().pushRequest(inst, true /* load */, nullptr,
-            size, addr, flags, NULL, nullptr);
+            size, addr, flags, nullptr, nullptr, byteEnable);
         return NoFault;
     }
 
     Fault
     writeMem(uint8_t *data, unsigned int size, Addr addr,
-             Request::Flags flags, uint64_t *res) override
+             Request::Flags flags, uint64_t *res,
+             const std::vector<bool>& byteEnable = std::vector<bool>())
+        override
     {
+        assert(byteEnable.empty() || byteEnable.size() == size);
         execute.getLSQ().pushRequest(inst, false /* store */, data,
-            size, addr, flags, res, nullptr);
+            size, addr, flags, res, nullptr, byteEnable);
         return NoFault;
     }
 
@@ -319,6 +331,18 @@ class ExecContext : public ::ExecContext
         thread.setPredicate(val);
     }
 
+    bool
+    readMemAccPredicate() const override
+    {
+        return thread.readMemAccPredicate();
+    }
+
+    void
+    setMemAccPredicate(bool val) override
+    {
+        thread.setMemAccPredicate(val);
+    }
+
     TheISA::PCState
     pcState() const override
     {
@@ -363,26 +387,6 @@ class ExecContext : public ::ExecContext
         const RegId& reg = si->destRegIdx(idx);
         assert(reg.isMiscReg());
         return thread.setMiscReg(reg.index(), val);
-    }
-
-    Fault
-    hwrei() override
-    {
-#if THE_ISA == ALPHA_ISA
-        return thread.hwrei();
-#else
-        return NoFault;
-#endif
-    }
-
-    bool
-    simPalCheck(int palFunc) override
-    {
-#if THE_ISA == ALPHA_ISA
-        return thread.simPalCheck(palFunc);
-#else
-        return false;
-#endif
     }
 
     void
@@ -440,51 +444,6 @@ class ExecContext : public ::ExecContext
     }
 
     BaseCPU *getCpuPtr() { return &cpu; }
-
-    /* MIPS: other thread register reading/writing */
-    RegVal
-    readRegOtherThread(const RegId &reg, ThreadID tid=InvalidThreadID)
-    {
-        SimpleThread *other_thread = (tid == InvalidThreadID
-            ? &thread : cpu.threads[tid]);
-
-        switch (reg.classValue()) {
-            case IntRegClass:
-                return other_thread->readIntReg(reg.index());
-                break;
-            case FloatRegClass:
-                return other_thread->readFloatReg(reg.index());
-                break;
-            case MiscRegClass:
-                return other_thread->readMiscReg(reg.index());
-            default:
-                panic("Unexpected reg class! (%s)",
-                      reg.className());
-                return 0;
-        }
-    }
-
-    void
-    setRegOtherThread(const RegId &reg, RegVal val,
-                      ThreadID tid=InvalidThreadID)
-    {
-        SimpleThread *other_thread = (tid == InvalidThreadID
-            ? &thread : cpu.threads[tid]);
-
-        switch (reg.classValue()) {
-            case IntRegClass:
-                return other_thread->setIntReg(reg.index(), val);
-                break;
-            case FloatRegClass:
-                return other_thread->setFloatReg(reg.index(), val);
-                break;
-            case MiscRegClass:
-                return other_thread->setMiscReg(reg.index(), val);
-            default:
-                panic("Unexpected reg class! (%s)",
-                      reg.className());
-        }
-    }
 
   public:
     // monitor/mwait funtions
