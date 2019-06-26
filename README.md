@@ -28,6 +28,7 @@ The SynchroTrace Simulation Framework has two parts:
 
 * Generate [multi-threaded event traces][Prism] for your program binary
 * **REQUIRES v2** trace format
+  * can convert v1 format to v2 format via: https://github.com/VANDAL/stgen_1to2
 
 Example:
 
@@ -71,7 +72,7 @@ Example wrapper:
        --num-cpus=8 --num-threads=8 --num-dirs=8 --num-l2caches=8                                \
        --l1d_size=64kB --l1d_assoc=2 --l1i_size=64kB --l1i_assoc=2 --l2_size=4096kB --l2_assoc=8 \
        --cpi-iops=1 --cpi-flops=1                                                                \
-       --bandwidth-factor=4 --master-freq=1 --cacheline_size=64
+       --bandwidth-factor=4 --monitor-freq=100 --cacheline_size=64
    ```
 
    List of valid arguments:

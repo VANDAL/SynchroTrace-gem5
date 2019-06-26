@@ -1,64 +1,41 @@
-#SYNCHROTRACE
+This is the gem5 simulator.
 
-##What is it?
+The main website can be found at http://www.gem5.org
 
-A fast computer-architecture simulation framework for design space exploration.  
-[See here for details](http://vlsi.ece.drexel.edu/index.php?title=SynchroTrace)
+A good starting point is http://www.gem5.org/Introduction, and for
+more information about building the simulator and getting started
+please see http://www.gem5.org/Documentation and
+http://www.gem5.org/Tutorials.
 
-Two tools form the SynchroTrace Simulation Framework:
+To build gem5, you will need the following software: g++ or clang,
+Python (gem5 links in the Python interpreter), SCons, SWIG, zlib, m4,
+and lastly protobuf if you want trace capture and playback
+support. Please see http://www.gem5.org/Dependencies for more details
+concerning the minimum versions of the aforementioned tools.
 
-1. [Sigil2 - Multi-Threaded Application Trace Capture Tool][Sigil2]
-2. **Replay** - Event-Trace Replay Framework
-  * This repo, from the [official SynchroTrace patch](http://reviews.gem5.org/r/3687)
+Once you have all dependencies resolved, type 'scons
+build/<ARCH>/gem5.opt' where ARCH is one of ALPHA, ARM, NULL, MIPS,
+POWER, SPARC, or X86. This will build an optimized version of the gem5
+binary (gem5.opt) for the the specified architecture. See
+http://www.gem5.org/Build_System for more details and options.
 
-##Build and Run
+With the simulator built, have a look at
+http://www.gem5.org/Running_gem5 for more information on how to use
+gem5.
 
-1. :exclamation: Check dependencies :exclamation:
-  * please see gem5's dependency list: http://gem5.org/Dependencies
-2. Acquire SynchroTraces
-  * Generate [multi-threaded event traces][Sigil2] for your program binary ***OR***
-  * Use included sample traces
-3. Build SynchroTrace
+The basic source release includes these subdirectories:
+   - configs: example simulation configuration scripts
+   - ext: less-common external packages needed to build gem5
+   - src: source code of the gem5 simulator
+   - system: source for some optional system software for simulated systems
+   - tests: regression tests
+   - util: useful utility programs and files
 
-   ```sh
-   $ git clone https://github.com/VANDAL/SynchroTrace-gem5
-   $ cd SynchroTrace-gem5
-   $ scons build/X86_MESI_Two_Level/gem5.opt -j
-   [hit enter to install git commit hook]
-   ```
-4. Run SynchroTrace
-  * Use the provided SynchroTrace configuration script
-    * arguments are passed in to configure the desired system
-    * this gem5 script is required to hook up the various architecture models packaged with the gem5 framework
-  * `<BASEDIR>/configs/example/synchrotrace_ruby.py` for *Ruby/Garnet Simulations*
-  * `<BASEDIR>/configs/example/synchrotrace_classic_memory.py` for *Classic Memory System Simulations*
+To run full-system simulations, you will need compiled system firmware
+(console and PALcode for Alpha), kernel binaries and one or more disk
+images. Please see the gem5 download page for these items at
+http://www.gem5.org/Download
 
-   Example script:
+If you have questions, please send mail to gem5-users@gem5.org
 
-   ```sh
-   # set some convenience vars
-   EVENT_PATH=/path/to/traces
-   OUTPUT_PATH=/path/to/output
-   
-   ./build/X86_MESI_Two_Level/gem5.opt                                                           \
-     --debug-flags=STIntervalPrint                                                               \
-     ./configs/example/synchrotrace_ruby.py                                                      \
-       --ruby                                                                                    \
-       --network=garnet2.0                                                                       \
-       --topology=Mesh_XY                                                                        \
-       --mesh-rows=8                                                                             \
-       --event-dir=$EVENT_PATH                                                                   \
-       --output-dir=$OUTPUT_PATH                                                                 \
-       --num-cpus=8 --num-threads=8 --num-dirs=8 --num-l2caches=8                                \
-       --l1d_size=64kB --l1d_assoc=2 --l1i_size=64kB --l1i_assoc=2 --l2_size=4096kB --l2_assoc=8 \
-       --cpi-iops=1 --cpi-flops=1                                                                \
-       --bandwidth-factor=4 --master-freq=1 --cacheline_size=64
-   ```
-   List of valid arguments:
-   ```sh
-   $ ./build/X86_MESI_Two_Level/gem5.opt ./configs/example/synchrotrace_ruby.py --help
-   ```
-
-   Simulated metrics are placed in **`m5out/stats.txt`**.
-
-[Sigil2]: https://github.com/VANDAL/Sigil2
+Enjoy using gem5 and please share your modifications and extensions.
