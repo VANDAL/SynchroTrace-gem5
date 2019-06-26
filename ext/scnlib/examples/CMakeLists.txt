@@ -1,0 +1,22 @@
+function (make_example name)
+    add_executable(example-${name} example-${name}.cpp)
+    target_link_libraries(example-${name} PRIVATE scn)
+    set_private_flags(example-${name})
+endfunction()
+
+make_example(1)
+make_example(2)
+make_example(3)
+make_example(tuple-return)
+make_example(file)
+make_example(getline)
+make_example(positional)
+make_example(get-value)
+
+if (SCN_HAS_RANGES)
+    make_example(ranges)
+    target_link_libraries(example-ranges PRIVATE scn-ranges)
+
+    make_example(get-value-ranges)
+    target_link_libraries(example-get-value-ranges PRIVATE scn-ranges)
+endif()

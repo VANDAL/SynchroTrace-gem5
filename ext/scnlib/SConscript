@@ -1,0 +1,26 @@
+Import('main')
+
+# The root of the build directory.
+# The top-level SConstruct builds each `ext` dir with
+# a `SConscript` in its own build dir
+build = Dir('.')
+scn_src = build.Dir('src')
+scn_include = build.Dir('include')
+
+# add the paths to the main environment
+# for any gem5 components to use
+main.Append(CPPPATH=[scn_include])
+main.Append(LIBPATH=[build])
+
+# build environment for this lib
+# e.g. in case we want any custom flags
+scn_env = main.Clone()
+
+# build the library
+main.StaticLibrary('scn', [scn_env.StaticObject(scn_src.File('stream.cpp')),
+                           scn_env.StaticObject(scn_src.File('istream.cpp')),
+                           scn_env.StaticObject(scn_src.File('visitor.cpp')),
+                           scn_env.StaticObject(scn_src.File('vscan.cpp')),
+                           scn_env.StaticObject(scn_src.File('locale.cpp')),
+                          ])
+main.Append(LIBS=['scn'])

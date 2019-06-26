@@ -59,6 +59,7 @@
  * Parses Prism event trace files and Prism Pthread file
  */
 
+#include "scn/scn.h"
 #include "st_parser.hh"
 
 
@@ -70,32 +71,6 @@ constexpr StEvent::InsnMarkerTagType StEvent::InsnMarkerTag;
 constexpr StEvent::TraceEventMarkerTagType StEvent::TraceEventMarkerTag;
 constexpr StEvent::EndTagType StEvent::EndTag;
 
-namespace
-{
-// Some helpers to safely parse a number and convert it to a smaller type
-template<typename T> inline T
-safe_strtoll(const char *str, char **str_end)
-{
-    const int64_t num = {std::strtoll(str, str_end, 0)};
-    assert(str != *str_end);
-
-    // XXX this still is problematic if T and U are signed/unsigned complements
-    // of the same size
-    assert(num <= std::numeric_limits<T>::max());
-
-    return static_cast<T>(num);
-}
-
-template<typename T> inline T
-safe_strtoul(const char *str, char **str_end)
-{
-    const uint64_t num = {std::strtoull(str, str_end, 0)};
-    assert(str != *str_end);
-    assert(num <= std::numeric_limits<T>::max());
-    return static_cast<T>(num);
-}
-
-}
 
 //----------------------------------------------------------------------------
 StTraceParser::StTraceParser(
@@ -104,8 +79,8 @@ StTraceParser::StTraceParser(
     m_bytesInMainMemoryTotal{bytesInMainMemoryTotal},
     m_maskForCacheOffset{bytesPerCacheBlock-1},
     rng(std::chrono::high_resolution_clock::now().time_since_epoch().count()),
-    tempWriteAddrs{},
-    tempReadAddrs{}
+    chunkedWriteAddrs{},
+    chunkedReadAddrs{}
 {
     fatal_if(maxBytesPerRequest > bytesPerCacheBlock,
              "cache block is too small for SynchroTrace replayer",
@@ -255,77 +230,39 @@ StTraceParser::parseCompEventTo(std::vector<StEvent>& buffer,
     //
     // @ 661,0,100,44 $ 0x402b110 0x402b113 $ 0xeffe968 0xeffe96f * 0x44f 0x450
 
-    // Can use one variable, but keep two so we can check
-    // if a the string was successfully parsed.
-    char* line_cstr = &line[0];
-    char* next_pos = NULL;
+    uint64_t iops, flops, reads, writes, start, end;
+    chunkedWriteAddrs.clear();
+    chunkedReadAddrs.clear();
+    auto s = scn::make_stream(line);
 
-    // number of iops
-    line_cstr += 2; // seek past "@ "
-    const uint64_t iops = {std::strtoull(line_cstr, &next_pos, 0)};
-    assert(next_pos != line_cstr);
+    auto res = scn::scan(s,
+                         "@ {:d},{:d},{:d},{:d} ",
+                         iops,
+                         flops,
+                         reads,
+                         writes);
+    fatal_if(!res, "error parsing compute trace event");
 
-    // number of flops
-    line_cstr = next_pos + 1; // seek past ","
-    const uint64_t flops = {std::strtoull(line_cstr, &next_pos, 0)};
-    assert(next_pos != line_cstr);
+    // generate chunked up write/read accesses
+    while (scn::scan(s, "$ {:x} {:x} ", start, end))
+        foreach_MemAddrChunk(start,
+                             end,
+                             [&] (uintptr_t addr, uint32_t bytes) {
+                                chunkedWriteAddrs.push_back(
+                                    {addr, bytes, ReqType::REQ_WRITE});
+                             });
+    while (scn::scan(s, "* {:x} {:x} ", start, end))
+        foreach_MemAddrChunk(start,
+                             end,
+                             [&] (uintptr_t addr, uint32_t bytes) {
+                                chunkedReadAddrs.push_back(
+                                    {addr, bytes, ReqType::REQ_READ});
+                             });
 
-    // number of reads
-    line_cstr = next_pos + 1; // seek past ","
-    const uint64_t memReads = {std::strtoull(line_cstr, &next_pos, 0)};
-    assert(next_pos != line_cstr);
-
-    // number of writes
-    line_cstr = next_pos + 1; // seek past ","
-    const uint64_t memWrites = {std::strtoull(line_cstr, &next_pos, 0)};
-    assert(next_pos != line_cstr);
-
-    // Seek to next '$' (write) or '*' (read), whichever comes first.
-    // The format expects the set of all writes,
-    // followed by the set of all reads in the event.
-    line_cstr = next_pos + 1;
-    assert(*line_cstr == WRITE_ADDR_DELIM ||
-           *line_cstr == READ_ADDR_DELIM ||
-           *line_cstr == '\0');
-
-    tempWriteAddrs.clear();
-    tempReadAddrs.clear();
-
-    // write addrs
-    auto push_writes = [&] (uintptr_t addr, uint32_t bytes) {
-        tempWriteAddrs.push_back({addr, bytes, ReqType::REQ_WRITE});
-    };
-    while (*line_cstr == '$')
-    {
-        ++line_cstr;
-        const uint64_t start = {std::strtoull(line_cstr, &next_pos, 0)};
-        const uint64_t end = {std::strtoull(next_pos+1, &line_cstr, 0)};
-        ++line_cstr;
-
-        foreach_MemAddrChunk(start, end, push_writes);
-    }
-
-    assert(*line_cstr == READ_ADDR_DELIM || *line_cstr == '\0');
-
-    // read addrs
-    auto push_reads = [&] (uintptr_t addr, uint32_t bytes) {
-        tempReadAddrs.push_back({addr, bytes, ReqType::REQ_READ});
-    };
-    while (*line_cstr == '*')
-    {
-        ++line_cstr;
-        const uint64_t start = {std::strtoull(line_cstr, &next_pos, 0)};
-        const uint64_t end = {std::strtoull(next_pos+1, &line_cstr, 0)};
-        foreach_MemAddrChunk(start, end, push_reads);
-        ++line_cstr;
-    }
-
-    assert(*line_cstr == '\0');
-
-    const size_t writeEventsSize = {tempWriteAddrs.size()};
-    const size_t readEventsSize = {tempReadAddrs.size()};
-    const uint64_t totalLocalReads = {std::max(memReads, readEventsSize)};
-    const uint64_t totalLocalWrites = {std::max(memWrites, writeEventsSize)};
+    const uint64_t chunkedReadsSize = {chunkedReadAddrs.size()};
+    const uint64_t chunkedWritesSize = {chunkedWriteAddrs.size()};
+    const uint64_t totalLocalReads = {std::max(reads, chunkedReadsSize)};
+    const uint64_t totalLocalWrites = {std::max(writes, chunkedWritesSize)};
     const uint64_t totalMemoryAccesses = {totalLocalReads + totalLocalWrites};
 
     if (totalMemoryAccesses == 0)
@@ -361,14 +298,14 @@ StTraceParser::parseCompEventTo(std::vector<StEvent>& buffer,
             {
                 case ReqType::REQ_READ:
                     buffer.emplace_back(StEvent::MemoryTag,
-                                        tempReadAddrs[readsInserted %
-                                                      readEventsSize]);
+                                        chunkedReadAddrs[readsInserted %
+                                                         chunkedReadsSize]);
                     readsInserted++;
                     break;
                 case ReqType::REQ_WRITE:
                     buffer.emplace_back(StEvent::MemoryTag,
-                                        tempWriteAddrs[writesInserted %
-                                                       writeEventsSize]);
+                                        chunkedWriteAddrs[writesInserted %
+                                                          chunkedWritesSize]);
                     writesInserted++;
                     break;
                 default:
@@ -389,7 +326,8 @@ StTraceParser::parseCompEventTo(std::vector<StEvent>& buffer,
         }
 
         // Distribute the residuals randomly amongst the generated compute
-        // events
+        // events. Note that this randomness means simulations will not be
+        // deterministic.
         std::uniform_int_distribution<size_t> gen(0, totalMemoryAccesses-1);
 
         // offset to the last generated compute event
@@ -424,22 +362,20 @@ StTraceParser::parseCommEventTo(std::vector<StEvent>& buffer,
     //
     // # 5 8388778 0x403e290 0x403e297
 
-    char* line_cstr = &line[0];
-    char* next_pos = nullptr;
-
-    while (*line_cstr == COMM_EVENT_TOKEN)
+    uint64_t prodThreadId, prodEventId, start, end;
+    auto s = scn::make_stream(line);
+    while (scn::scan(s, "# {:d} {:d} {:x} {:x} ",
+                     prodThreadId,
+                     prodEventId,
+                     start,
+                     end))
     {
-        ++line_cstr;
-        const ThreadID prodThreadId =
-            {safe_strtoll<ThreadID>(line_cstr, &next_pos)};
-        const StEventID prodEventId =
-            {safe_strtoul<StEventID>(next_pos, &line_cstr)};
-
-        const uint64_t start = {std::strtoull(line_cstr, &next_pos, 0)};
-        assert(next_pos != line_cstr);
-
-        const uint64_t end = {std::strtoull(next_pos, &line_cstr, 0)};
-        assert(next_pos != line_cstr);
+        fatal_if(prodThreadId > std::numeric_limits<ThreadID>::max() ||
+                 prodEventId > std::numeric_limits<StEventID>::max(),
+                 "invalid data detected while parsing comm event: "
+                 "Producer Thread<%d>:Producer Event<%d>",
+                 prodThreadId,
+                 prodEventId);
 
         foreach_MemAddrChunk(start,
                              end,
@@ -450,7 +386,6 @@ StTraceParser::parseCommEventTo(std::vector<StEvent>& buffer,
                                                     prodEventId,
                                                     prodThreadId);
                                 });
-        ++line_cstr;
     }
 }
 
@@ -468,35 +403,23 @@ StTraceParser::parseThreadEventTo(std::vector<StEvent>& buffer,
     //
     // ^ 6^0xad97700&0xdeadbeef
 
-    char *line_cstr = &line[2];
-    char *next_pos = NULL;
-
     using IntegralType = std::underlying_type<ThreadApi::EventType>::type;
+    constexpr auto max = static_cast<IntegralType>(
+        ThreadApi::EventType::NUM_TYPES);
+
+    uint64_t typeVal, pthAddr;
+    auto s = scn::make_stream(line);
+    auto res = scn::scan(s, "^ {:d}^{:x}", typeVal, pthAddr);
+    fatal_if(!res, "error parsing pthread api trace event");
 
     // pthread event type
-    const uint64_t type_ = {std::strtoull(line_cstr, &next_pos, 0)};
-    assert(line_cstr != next_pos);
-    assert(type_ < static_cast<IntegralType>(ThreadApi::EventType::NUM_TYPES));
+    assert(typeVal < max);
     const ThreadApi::EventType type =
-        {static_cast<ThreadApi::EventType>(type_)};
-    assert(*next_pos == '^');
-
-    // the pthread type's "address"
-    line_cstr = next_pos + 1;
-    const Addr pthAddr = {std::strtoull(line_cstr, &next_pos, 0)};
-    assert(line_cstr != next_pos);
+        static_cast<ThreadApi::EventType>(typeVal);
 
     // the lock variable for the conditional signal/wait
     Addr mutexLockAddr = 0;
-    if (*next_pos == '&')
-    {
-        line_cstr = next_pos + 1;
-        mutexLockAddr = {std::strtoull(line_cstr, &next_pos, 0)};
-        assert(line_cstr != next_pos);
-    }
-
-    // Do not expect anymore data to be parsed
-    assert(*next_pos == '\0');
+    scn::scan(s, "&{:x}", mutexLockAddr);
 
     buffer.emplace_back(StEvent::ThreadApiTag, type, pthAddr, mutexLockAddr);
 }
@@ -511,7 +434,10 @@ StTraceParser::parseMarkerEventTo(std::vector<StEvent>& buffer,
     //
     // ! 4096
 
-    const uint64_t insns = {std::strtoull(&line[0] + 2, NULL, 0)};
+    uint64_t insns;
+    auto s = scn::make_stream(line);
+    auto res = scn::scan(s, "! {:d}", insns);
+    fatal_if(!res, "error parsing instruction marker event");
     buffer.emplace_back(StEvent::InsnMarkerTag, insns);
 }
 
@@ -623,20 +549,14 @@ StTracePthreadMetadata::parseAddressToID(std::string& line)
     // example:
     // ##80881984,2
 
-    char* line_cstr = &line[2];
-    char* next_pos = NULL;
-
-    const Addr threadAddr = {std::strtoull(line_cstr, &next_pos, 0)};
-    assert(line_cstr != next_pos);
-    assert(',' == *next_pos);
-    line_cstr = next_pos + 1;
-
-    const ThreadID threadId = {safe_strtoll<ThreadID>(line_cstr, &next_pos)};
-    assert(threadId > 0);
+    uint64_t pthAddr, threadId;
+    auto s = scn::make_stream(line);
+    auto res = scn::scan(s, "##{:d},{:d}", pthAddr, threadId);
+    fatal_if(!res, "error parsing thread create from pthread file");
 
     // Keep Thread IDs in a map.
     // The trace has base-1 thread ids, but replay expects base-0.
-    auto p = m_addressToIdMap.insert({threadAddr, threadId - 1});
+    auto p = m_addressToIdMap.insert({pthAddr, threadId - 1});
     assert(p.second);
 }
 
@@ -646,24 +566,10 @@ StTracePthreadMetadata::parseBarrierEvent(std::string& line)
     // example:
     // **67117104,1,2,3,4,5,6,7,8,
 
-    char* line_cstr = &line[2];
-    char* next_pos = NULL;
-
-    const Addr barrierAddr = {std::strtoull(line_cstr, &next_pos, 0)};
-    assert(line_cstr != next_pos);
-    assert(',' == *next_pos);
-    line_cstr = next_pos + 1;
-
-    std::set<ThreadID> threadIds;
-    while (*line_cstr)
-    {
-        const ThreadID threadId =
-            {safe_strtoll<ThreadID>(line_cstr, &next_pos)};
-        assert(threadId > 0);
-        assert(',' == *next_pos);
-        line_cstr = next_pos + 1;
-        threadIds.insert(threadId - 1);
-    }
-    auto p = m_barrierMap.insert({barrierAddr, std::move(threadIds)});
-    assert(p.second);
+    uint64_t pthAddr, threadId;
+    auto s = scn::make_stream(line);
+    auto res = scn::scan(s, "**{:d},", pthAddr);
+    fatal_if(!res, "error parsing barrier from file");
+    while (scn::scan(s, "{:d},", threadId))
+        m_barrierMap[pthAddr].insert(threadId - 1);
 }

@@ -1,0 +1,6 @@
+doc/html/
+doc/latex/
+doc/*.tmp
+benchmark/bloat/out/
+test/fuzz/corpus/*
+

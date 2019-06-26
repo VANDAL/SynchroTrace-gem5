@@ -93,8 +93,8 @@ class StTraceParser
 
     /** Cached state, optimization */
     std::mt19937_64 rng;
-    std::vector<MemoryRequest> tempWriteAddrs;
-    std::vector<MemoryRequest> tempReadAddrs;
+    std::vector<MemoryRequest> chunkedWriteAddrs;
+    std::vector<MemoryRequest> chunkedReadAddrs;
 
   public:
     StTraceParser(
