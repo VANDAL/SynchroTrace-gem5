@@ -808,14 +808,12 @@ SynchroTraceReplayer::tryCxtSwapAndSchedule(CoreID coreId)
     auto& threadsOnCore = coreToThreadMap[coreId];
     assert(threadsOnCore.size() > 0);
 
-    auto it = threadsOnCore.begin();
-    while (++it != threadsOnCore.cend())
-    {
-        const ThreadContext& tcxt = *it;
-        if (tcxt.status != ThreadStatus::INACTIVE &&
-            tcxt.status != ThreadStatus::COMPLETED)
-            break;
-    }
+    auto it = std::find_if(std::next(threadsOnCore.begin()),
+                           threadsOnCore.end(),
+                           [](const ThreadContext &tcxt) {
+                              return (tcxt.status != ThreadStatus::INACTIVE) &&
+                                     (tcxt.status != ThreadStatus::COMPLETED);
+                           });
 
     // if no threads were found that could be swapped
     if (it == threadsOnCore.cend())
