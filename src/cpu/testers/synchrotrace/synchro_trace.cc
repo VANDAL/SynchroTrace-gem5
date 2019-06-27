@@ -758,10 +758,13 @@ void SynchroTraceReplayer::msgReqSend(CoreID coreId,
                 coreToThreadMap[coreId].front().get().currEventId,
                 addr);
     } else {
+        // The packet may not have been issued because another component
+        // along the way became overwhelmed and had to drop the packet.
         warn("%d: Packet did not issue from CoreID: %d, ThreadID: %d",
              curTick(),
              coreId,
              coreToThreadMap[coreId].front().get().threadId);
+
         // If the packet did not issue, delete it and create a new one upon
         // reissue. Cannot reuse it because it's created with the current
         // system state.
@@ -769,11 +772,9 @@ void SynchroTraceReplayer::msgReqSend(CoreID coreId,
         // will delete it
         delete pkt;
 
-        fatal("Unexpected Timing Request failed for "
-              "Core: %d; Thread: %d; Event: %zu\n",
-              coreId,
-              coreToThreadMap[coreId].front().get().threadId,
-              coreToThreadMap[coreId].front().get().currEventId);
+        // Because there will be no response packet to wakeup the core,
+        // reschedule the core to try again next cycle.
+        schedule(coreEvents[coreId], curTick() + clockPeriod());
     }
 }
 
