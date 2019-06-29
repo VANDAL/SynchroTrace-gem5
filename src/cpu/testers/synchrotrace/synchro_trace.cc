@@ -259,7 +259,6 @@ SynchroTraceReplayer::wakeupCore(CoreID coreId)
 
     switch (tcxt.evStream.peek().tag)
     {
-    /** Replay events */
     case StEvent::Tag::COMPUTE:
         replayCompute(tcxt, coreId);
         break;
@@ -272,39 +271,28 @@ SynchroTraceReplayer::wakeupCore(CoreID coreId)
     case StEvent::Tag::THREAD_API:
         replayThreadAPI(tcxt, coreId);
         break;
-
-    /** Meta events */
     case StEvent::Tag::TRACE_EVENT_MARKER:
-        // a simple metadata marker; reschedule the next actual event
-        DPRINTF(STEventPrint, "Started %d, %d\n",
-                tcxt.threadId,
-                tcxt.evStream.peek().traceEventMarker.eventId);
-        assert(tcxt.currEventId ==
-               tcxt.evStream.peek().traceEventMarker.eventId);
-        tcxt.currEventId++;  // increment after, starts at 0
-        schedule(coreEvents[coreId], curTick());
-        tcxt.evStream.pop();
+        processEventMarker(tcxt, coreId);
         break;
     case StEvent::Tag::INSN_MARKER:
-        // a simple metadata marker; reschedule the next actual event
-        // TODO(now) track stats
-        schedule(coreEvents[coreId], curTick());
-        tcxt.evStream.pop();
+        processInsnMarker(tcxt, coreId);
         break;
     case StEvent::Tag::END_OF_EVENTS:
-        tcxt.status = ThreadStatus::COMPLETED;
-        tcxt.evStream.pop();
-        tryCxtSwapAndSchedule(coreId);
+        processEndMarker(tcxt, coreId);
         break;
     default:
-        panic("unexpected event encountered: "
-              "Thread<%d>:Event<%d>:Tag<%d>",
+        panic("unexpected event encountered: Thread<%d>:Event<%d>:Tag<%d>",
               tcxt.threadId,
               tcxt.currEventId,
               static_cast<std::underlying_type<StEvent::Tag>::type>
               (tcxt.evStream.peek().tag));
     }
 }
+
+
+/******************************************************************************
+ * Replay
+ */
 
 void
 SynchroTraceReplayer::replayCompute(ThreadContext& tcxt, CoreID coreId)
@@ -711,6 +699,43 @@ SynchroTraceReplayer::replayThreadAPI(ThreadContext& tcxt, CoreID coreId)
               static_cast<EventIntegerType>(ev.threadApi.eventType));
         break;
     }
+}
+
+
+/******************************************************************************
+ * Meta events
+ */
+void
+SynchroTraceReplayer::processEventMarker(ThreadContext& tcxt, CoreID coreId)
+{
+    // a simple metadata marker; reschedule the next actual event
+    DPRINTF(STEventPrint, "Started %d, %d\n",
+            tcxt.threadId,
+            tcxt.evStream.peek().traceEventMarker.eventId);
+    assert(tcxt.currEventId ==
+           tcxt.evStream.peek().traceEventMarker.eventId);
+    tcxt.currEventId++;  // increment after, starts at 0
+    schedule(coreEvents[coreId], curTick());
+    tcxt.evStream.pop();
+}
+
+void
+SynchroTraceReplayer::processInsnMarker(ThreadContext& tcxt, CoreID coreId)
+{
+    // a simple metadata marker; reschedule the next actual event
+    // TODO(soonish) track stats
+    schedule(coreEvents[coreId], curTick());
+    tcxt.evStream.pop();
+}
+
+void
+SynchroTraceReplayer::processEndMarker(ThreadContext& tcxt, CoreID coreId)
+{
+        tcxt.status = ThreadStatus::COMPLETED;
+        tcxt.evStream.pop();
+
+        // it's okay if there's not another thread to schedule
+        (void)tryCxtSwapAndSchedule(coreId);
 }
 
 

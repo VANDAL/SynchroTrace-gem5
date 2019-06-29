@@ -342,6 +342,16 @@ class SynchroTraceReplayer : public MemObject
     void replayComm(ThreadContext& tcxt, CoreID coreId);
     void replayThreadAPI(ThreadContext& tcxt, CoreID coreId);
 
+    /**
+     * Process meta events.
+     *
+     * These are markers in the event stream and do not effect timing
+     * or the architectural state.
+     */
+    void processEventMarker(ThreadContext& tcxt, CoreID coreId);
+    void processInsnMarker(ThreadContext& tcxt, CoreID coreId);
+    void processEndMarker(ThreadContext& tcxt, CoreID coreId);
+
     /** Send a blocking message request to memory system. */
     void msgReqSend(CoreID coreId, Addr addr, uint32_t bytes, ReqType type);
 
