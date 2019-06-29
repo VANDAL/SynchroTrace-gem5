@@ -327,6 +327,22 @@ class SynchroTraceReplayer : public MemObject
                      memSizeBytes},
             status{ThreadStatus::INACTIVE}
         {}
+
+        // Note that a 'running' thread may be:
+        // - blocked
+        // - deadlocked
+        //
+        // TODO(someday) come up with a better name...
+        bool running() const
+        { return status > ThreadStatus::INACTIVE &&
+                 status < ThreadStatus::COMPLETED; }
+
+        bool blocked() const
+        { return status > ThreadStatus::ACTIVE &&
+                 status < ThreadStatus::COMPLETED; }
+
+        bool completed() const
+        { return status == ThreadStatus::COMPLETED; }
     };
 
   private:

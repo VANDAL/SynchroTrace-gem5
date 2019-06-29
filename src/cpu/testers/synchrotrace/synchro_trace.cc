@@ -182,9 +182,8 @@ SynchroTraceReplayer::wakeupMonitor()
 {
     // Terminates the simulation if all the threads are done
     if (std::all_of(threadContexts.cbegin(), threadContexts.cend(),
-                    [](const ThreadContext& cxt) {
-                        return cxt.status == ThreadStatus::COMPLETED;
-                    }))
+                    [](const ThreadContext& tcxt)
+                    { return tcxt.completed(); }))
         exitSimLoop("SynchroTrace completed");
 
     // Prints thread status every hour
@@ -252,8 +251,8 @@ SynchroTraceReplayer::wakeupCore(CoreID coreId)
     //   - swapping any blocked threads
 
     ThreadContext& tcxt = coreToThreadMap[coreId].front();
-    panic_if(tcxt.status == ThreadStatus::INACTIVE ||
-             tcxt.status == ThreadStatus::COMPLETED,
+
+    panic_if(!tcxt.running(),
              "Trying to run Thread %d with status %s",
              tcxt.threadId, toString(tcxt.status));
 
@@ -454,20 +453,21 @@ SynchroTraceReplayer::replayThreadAPI(ThreadContext& tcxt, CoreID coreId)
                  "sigil.pthread.out file: %d\n"
                  "Are the traces and pthread file in sync?", pthAddr);
 
-        const ThreadID serfThreadId =
+        const ThreadID workerThreadId =
             {pthMetadata.addressToIdMap().at(pthAddr)};
-
-        fatal_if(serfThreadId >= threadContexts.size(),
+        fatal_if(workerThreadId >= threadContexts.size(),
                  "Tried to create Thread %d, "
                  "but simulation is configured with %d threads!",
-                 serfThreadId,
+                 workerThreadId,
                  numThreads);
-        fatal_if(threadContexts[serfThreadId].status != ThreadStatus::INACTIVE,
-                 "Tried to create Thread %d, but it already exists!",
-                 serfThreadId);
 
-        threadContexts[serfThreadId].status = ThreadStatus::ACTIVE;
-        const CoreID serfCoreId = {threadIdToCoreId(serfThreadId)};
+        ThreadContext& workertcxt = threadContexts[workerThreadId];
+        fatal_if(workertcxt.status != ThreadStatus::INACTIVE,
+                 "Tried to create Thread %d, but it already exists!",
+                 workerThreadId);
+
+        workertcxt.status = ThreadStatus::ACTIVE;
+        const CoreID workerCoreId = {threadIdToCoreId(workerThreadId)};
 
         // The new thread may be mapped to an already active core,
         // e.g. the currently executing core. Check that we don't
@@ -478,60 +478,53 @@ SynchroTraceReplayer::replayThreadAPI(ThreadContext& tcxt, CoreID coreId)
         //  is not allowed)
         schedule(coreEvents[coreId],
                  curTick() + clockPeriod() * Cycles(pthCycles));
-        if (!coreEvents[serfCoreId].scheduled())
+        if (!coreEvents[workerCoreId].scheduled())
             // wake up core (only core 0 is initially working)
-            schedule(coreEvents[serfCoreId], curTick() + clockPeriod());
+            schedule(coreEvents[workerCoreId], curTick() + clockPeriod());
 
-        DPRINTF(STDebug, "Thread %d created", serfThreadId);
+        DPRINTF(STDebug, "Thread %d created", workerThreadId);
         tcxt.evStream.pop();
     }
         break;
     case ThreadApi::EventType::THREAD_JOIN:
     {
-        const ThreadID serfThreadId =
-            {pthMetadata.addressToIdMap().at(pthAddr)};
+        fatal_if(pthMetadata.addressToIdMap().find(pthAddr) ==
+                 pthMetadata.addressToIdMap().cend(),
+                 "no matching pthread value to join: %x", pthAddr);
 
-        const ThreadStatus serfStatus =
-            {threadContexts[serfThreadId].status};
+        const ThreadContext& workertcxt =
+            threadContexts[pthMetadata.addressToIdMap().at(pthAddr)];
 
-        switch (serfStatus)
+        if (workertcxt.completed())
         {
-        case ThreadStatus::COMPLETED:
             // reset to active, in case this thread was previously blocked
             tcxt.status = ThreadStatus::ACTIVE;
             workerThreadCount--;
-            DPRINTF(STDebug, "Thread %d joined", serfThreadId);
+            DPRINTF(STDebug, "Thread %d joined", workertcxt.threadId);
             if (DTRACE(ROI) && !workerThreadCount)
                 DPRINTFN("Last thread joined!");
             tcxt.evStream.pop();
             schedule(coreEvents[coreId],
                      curTick() + clockPeriod() * Cycles(pthCycles));
-            break;
-        case ThreadStatus::ACTIVE:
-        case ThreadStatus::BLOCKED_COMM:
-        case ThreadStatus::BLOCKED_MUTEX:
-        case ThreadStatus::BLOCKED_BARRIER:
-        case ThreadStatus::BLOCKED_COND:
-        case ThreadStatus::BLOCKED_JOIN:
+        }
+        else if (workertcxt.running())
+        {
             tcxt.status = ThreadStatus::BLOCKED_JOIN;
             DPRINTF(STDebug,
                     "Thread %d on Core %d blocked trying to join Thread %d"
                     " with status: %s",
                     tcxt.threadId,
                     coreId,
-                    serfThreadId,
-                    toString(threadContexts[serfThreadId].status));
+                    workertcxt.threadId,
+                    toString(workertcxt.status));
             if (!tryCxtSwapAndSchedule(coreId))
                 schedule(coreEvents[coreId],
                          curTick() + clockPeriod() * Cycles(schedSliceCycles));
-            break;
-        case ThreadStatus::INACTIVE:
+        }
+        else
+        {
             fatal("Tried joining Thread %d that was not created yet!",
-                  serfThreadId);
-            break;
-        default:
-            panic("Unexpected thread status detected in join!");
-            break;
+                  workertcxt.threadId);
         }
     }
         break;
@@ -824,12 +817,10 @@ SynchroTraceReplayer::tryCxtSwapAndSchedule(CoreID coreId)
     auto& threadsOnCore = coreToThreadMap[coreId];
     assert(threadsOnCore.size() > 0);
 
-    auto it = std::find_if(std::next(threadsOnCore.begin()),
-                           threadsOnCore.end(),
-                           [](const ThreadContext &tcxt) {
-                              return (tcxt.status != ThreadStatus::INACTIVE) &&
-                                     (tcxt.status != ThreadStatus::COMPLETED);
-                           });
+    auto it = std::find_if(std::next(threadsOnCore.cbegin()),
+                           threadsOnCore.cend(),
+                           [](const ThreadContext &tcxt)
+                           { return tcxt.running(); });
 
     // if no threads were found that could be swapped
     if (it == threadsOnCore.cend())
@@ -837,7 +828,7 @@ SynchroTraceReplayer::tryCxtSwapAndSchedule(CoreID coreId)
 
     // else we found a thread to swap.
     // Rotate threads round-robin and schedule the context swap.
-    std::rotate(threadsOnCore.begin(), it, threadsOnCore.end());
+    std::rotate(threadsOnCore.cbegin(), it, threadsOnCore.cend());
     schedule(coreEvents[coreId],
              curTick() + clockPeriod() * Cycles(cxtSwitchCycles));
     return true;
