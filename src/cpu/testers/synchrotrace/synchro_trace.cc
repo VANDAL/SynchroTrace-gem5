@@ -95,11 +95,12 @@ SynchroTraceReplayer::SynchroTraceReplayer(const Params *p)
     synchroTraceDebugLogEvent(*this),
     masterID(p->system->getMasterId(this, name()))
 {
-    // MDL20190622 Some members MUST be set in the init routine
-    // because the initialization order of all SimObjects is undefined
-    // afaict. Variables that depend on other SimObjects being initialized
-    // should be set in the init routine. Only variables that depend on
-    // input parameters should be set here in the constructor.
+    // MDL20190622 Some members should be set in the init routine
+    // because the initialization order of all SimObjects is not guaranteed.
+    // Afaict it is dependent upon the order of SimObject creation in the
+    // python configuration script. Variables that depend on other SimObjects
+    // being initialized should be set in the init routine. Variables that
+    // depend only on input parameters should be set here in the constructor.
     //
     // In contrast, some members MUST be set in the constructor
     // because they are needed BEFORE `init` gets to run.
@@ -817,18 +818,18 @@ SynchroTraceReplayer::tryCxtSwapAndSchedule(CoreID coreId)
     auto& threadsOnCore = coreToThreadMap[coreId];
     assert(threadsOnCore.size() > 0);
 
-    auto it = std::find_if(std::next(threadsOnCore.cbegin()),
-                           threadsOnCore.cend(),
+    auto it = std::find_if(std::next(threadsOnCore.begin()),
+                           threadsOnCore.end(),
                            [](const ThreadContext &tcxt)
                            { return tcxt.running(); });
 
     // if no threads were found that could be swapped
-    if (it == threadsOnCore.cend())
+    if (it == threadsOnCore.end())
         return false;
 
     // else we found a thread to swap.
     // Rotate threads round-robin and schedule the context swap.
-    std::rotate(threadsOnCore.cbegin(), it, threadsOnCore.cend());
+    std::rotate(threadsOnCore.begin(), it, threadsOnCore.end());
     schedule(coreEvents[coreId],
              curTick() + clockPeriod() * Cycles(cxtSwitchCycles));
     return true;
