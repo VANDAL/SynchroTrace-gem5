@@ -389,12 +389,15 @@ if main['GCC'] or main['CLANG']:
     # want to allow (e.g., deprecation warnings).
     main.Append(CCFLAGS=['-Werror',
                          '-Wno-error=deprecated-declarations',
-                         '-Wno-error=deprecated',
-                         '-Wno-error=deprecated-copy',
-                         '-Wno-error=address-of-packed-member',
-                         '-Wno-error=array-bounds',
-                         '-Wno-error=redundant-move',
-                        ])
+                         '-Wno-error=deprecated'])
+
+    # support newer GCC/Clang versions which have more warnings
+    vmatch = re.match(".*(([0-9]+)\.[0-9]+\.[0-9]+).*", CXX_version)
+    if vmatch and int(vmatch.groups()[1]) > 8:
+        main.Append(CCFLAGS=['-Wno-error=deprecated-copy',
+                             '-Wno-error=address-of-packed-member',
+                             '-Wno-error=array-bounds',
+                             '-Wno-error=redundant-move'])
 
 else:
     print(termcap.Yellow + termcap.Bold + 'Error' + termcap.Normal, end=' ')
